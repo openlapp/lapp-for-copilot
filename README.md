@@ -4,7 +4,11 @@
 
 # OpenLAPP for Copilot
 
+English · [简体中文](./README.zh-CN.md)
+
 Windows x64 VS Code UI extension that registers the local LAPP profile as a Copilot language-model vendor (`openlapp`).
+
+Licensed under [MIT](./LICENSE).
 
 ## Install
 
@@ -41,3 +45,7 @@ The extension does not publish, does not use proposed APIs, and does not add a c
 | `pnpm release:publish` | Opt-in VS Code Marketplace publish (`gh workflow run`) |
 
 See [docs/RELEASING.md](docs/RELEASING.md) for the GitHub Actions release flow.
+
+## License
+
+[MIT](./LICENSE) © 2026 OpenLAPP
