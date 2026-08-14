@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or branch to publish (e.g. v0.1.0). Leave empty for the latest semver tag."
+        required: false
+        default: ""
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'branch'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/release-please-manifest.json
+
+  package:
+    needs: [release]
+    if: |
+      always() &&
+      !cancelled() &&
+      github.event_name == 'push' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
+       (github.ref == 'refs/heads/main' && needs.release.outputs.release_created == 'true'))
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    concurrency:
+      group: package-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm package
+
+      - name: Locate VSIX
+        id: vsix
+        shell: bash
+        run: node .github/scripts/locate-vsix.mjs
+
+      - name: Render release notes from CHANGELOG.md
+        shell: bash
+        run: node .github/scripts/render-release-notes.mjs
+
+      - name: Attach VSIX to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: ${{ steps.vsix.outputs.path }}
+          fail_on_unmatched_files: true
+          overwrite: true
+
+      - name: Show release info
+        shell: bash
+        run: |
+          echo "Packaged ${{ github.ref_name }} — VSIX at ${{ steps.vsix.outputs.path }}"
+
+  publish-marketplace:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    concurrency:
+      group: publish-marketplace
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Resolve target ref
+        id: ref
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.ref }}" ]; then
+            REF="${{ inputs.ref }}"
+          else
+            REF=$(git ls-remote --tags --sort=-v:refname "https://github.com/${GITHUB_REPOSITORY}.git" | \
+                  awk '{print $2}' | sed 's#refs/tags/##' | grep -E '^v?[0-9]' | head -1)
+            if [ -z "$REF" ]; then
+              echo "::error::No tags found on origin; pass -f ref=vX.Y.Z explicitly."
+              exit 1
+            fi
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved ref: $REF"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.ref }}
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm package
+
+      - name: Locate VSIX
+        id: vsix
+        shell: bash
+        run: node .github/scripts/locate-vsix.mjs
+
+      - name: Publish to VS Code Marketplace
+        shell: bash
+        run: |
+          pnpm exec vsce publish --packagePath "${{ steps.vsix.outputs.path }}"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

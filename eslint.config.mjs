@@ -56,7 +56,7 @@ export default [
     },
   },
   {
-    files: ["test/**/*.ts", "test/**/*.mjs", "scripts/**/*.mjs"],
+    files: ["test/**/*.ts", "test/**/*.mjs", "scripts/**/*.mjs", ".github/scripts/**/*.mjs"],
     rules: {
       "no-console": "off",
     },

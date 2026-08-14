@@ -36,3 +36,8 @@ The extension does not publish, does not use proposed APIs, and does not add a c
 | `pnpm test:integration` | `@vscode/test-electron` host tests |
 | `pnpm test:ui-smoke` | `vscode-extension-tester` GUI smoke (fail-closed: launch/test failure exits nonzero) |
 | `pnpm package` / `pnpm verify:vsix` | Windows x64 VSIX + content audit |
+| `pnpm push` / `pnpm push:all` | Push `HEAD` (and tags) to `origin` |
+| `pnpm release:tag` / `pnpm release:push` | Annotated `v<version>` tag; optionally push commit + tag |
+| `pnpm release:publish` | Opt-in VS Code Marketplace publish (`gh workflow run`) |
+
+See [docs/RELEASING.md](docs/RELEASING.md) for the GitHub Actions release flow.

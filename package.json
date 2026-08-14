@@ -6,6 +6,14 @@
   "publisher": "openlapp",
   "license": "MIT",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openlapp/lapp-for-copilot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openlapp/lapp-for-copilot/issues"
+  },
+  "homepage": "https://github.com/openlapp/lapp-for-copilot#readme",
   "type": "module",
   "main": "./dist/extension.cjs",
   "icon": "media/icon.png",
@@ -143,7 +151,13 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "package": "node scripts/package-vsix.mjs",
     "verify:vsix": "node scripts/verify-vsix.mjs",
-    "ci": "pnpm check && pnpm build && pnpm test:integration && pnpm package && pnpm verify:vsix && pnpm test:ui-smoke"
+    "ci": "pnpm check && pnpm build && pnpm test:integration && pnpm package && pnpm verify:vsix && pnpm test:ui-smoke",
+    "push": "git push origin HEAD",
+    "push:tags": "git push origin --tags",
+    "push:all": "git push origin HEAD && git push origin --tags",
+    "release:tag": "node scripts/cut-release.mjs",
+    "release:push": "node scripts/cut-release.mjs --push",
+    "release:publish": "gh workflow run release.yml --repo openlapp/lapp-for-copilot"
   },
   "dependencies": {
     "@openlapp/lapp": "file:vendor/openlapp-lapp-0.1.3-copilot.0.tgz"
