@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-const tag = process.env.GITHUB_REF_NAME ?? process.argv[2] ?? "";
+const tag = process.argv[2] || process.env.GITHUB_REF_NAME || "";
 const version = tag.replace(/^v/, "");
 if (!version) {
   console.error("usage: render-release-notes.mjs <tag>");

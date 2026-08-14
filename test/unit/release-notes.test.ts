@@ -14,11 +14,16 @@ describe("release notes renderer", () => {
     const result = spawnSync(process.execPath, [
       path.join(root, ".github", "scripts", "render-release-notes.mjs"),
       `v${pkg.version}`,
-    ], { cwd: root, encoding: "utf8" });
+    ], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REF_NAME: "main" },
+    });
     expect(result.status).toBe(0);
     expect(fs.existsSync(notesPath)).toBe(true);
     const body = fs.readFileSync(notesPath, "utf8");
     expect(body).toContain(`## ${pkg.version}`);
+    expect(body).not.toBe("main\n");
     fs.rmSync(notesPath, { force: true });
   });
 });
