@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="OpenLAPP">
+  <title>OpenLAPP</title>
+  <rect width="512" height="512" fill="#ffffff"/>
+  <path fill="#1A304A" d="
+    M146 214
+    C146 190 158 126 176 108
+    C194 90 214 148 230 176
+    H282
+    C298 148 318 90 336 108
+    C354 126 366 190 366 214
+    V348
+    C366 392 334 424 290 424
+    H222
+    C178 424 146 392 146 348
+    Z"/>
+  <path fill="none" stroke="#2DC4B0" stroke-width="28" stroke-linecap="round"
+    d="M196 286 C228 252 248 320 280 286 C296 270 308 266 318 274"/>
+</svg>

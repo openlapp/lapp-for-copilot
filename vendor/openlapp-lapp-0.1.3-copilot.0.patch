@@ -1,0 +1,3112 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 7d8fe9a4e7657c693ee202bea61b8e2705b5ec3d..af9736468ac0e961f8a7881edd26673330fa289c 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -7,6 +7,15 @@ CLI maintained by the companion Manager repository.
+ 
+ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+ 
++## [0.1.3-copilot.0] - 2026-08-13
++
++### Added
++
++- Additive `LappManagerBridgeV2` / `createNodeLappManagerHostV2` with
++  revision-gated model-discovery preview/apply and `testConnectionV2`.
++- JS/TypeScript-only normalized multimodal and tool contract for the three
++  bundled chat adapters, including strict JSON-object tool arguments.
++
+ ## [0.1.2] - 2026-07-25
+ 
+ ### Added
+diff --git a/docs/sdk.md b/docs/sdk.md
+index a16451cdc9444914145e19314eb82cc50287e784..026c9f4c6af0b9f324e47083e9d556eb5052371a 100644
+--- a/docs/sdk.md
++++ b/docs/sdk.md
+@@ -283,6 +283,9 @@ import type { LappManagerBridgeV1 } from "@openlapp/lapp/manager-contract";
+ 
+ `LappManagerBridgeV1` exposes five narrow capabilities: `handshake()`,
+ `getSnapshot()`, `transact()`, `testConnection()`, and optional `subscribe()`.
++`createNodeLappManagerHostV2()` adds a protocol-2 handshake plus
++`previewModels()`, `applyModels()`, `cancelPreview()`, and
++`testConnectionV2()` without changing those V1 methods.
+ Snapshots contain an opaque revision and sanitized profile/credential status;
+ they never contain plaintext credentials. Mutations are semantic
+ `ManagerOperation` values sent with the expected revision. The Node host
+@@ -352,6 +355,8 @@ Client methods:
+ | `stream(input)` | Async `delta`, `tool-call`, `usage`, `finish`, and `error` events. |
+ | `executeWithTools(input, tools, handlers, options?)` | Complete tool-loop text, turn count, and transcript. |
+ | `testConnection()` | Small direct request result. |
++| `chatNormalized(input)` | Normalized multimodal/tool response for Copilot-facing adapters. |
++| `streamNormalized(input)` | Normalized stream; invalid tool arguments fail instead of becoming `{}`. |
+ 
+ `ChatInput.extra` may add provider-native fields, but cannot override target,
+ messages/input, stream, tools, or authentication fields. `AbortSignal` is
+diff --git a/package.json b/package.json
+index 07439de265b8cd9696c78561c2e3a9f256461036..55a4c60137b3ca1e607cd772c04d260ff3cefba3 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "lapp-js",
+-  "version": "0.1.2",
++  "version": "0.1.3-copilot.0",
+   "private": true,
+   "description": "TypeScript SDK workspace for LAPP (Local AI Provider Profiles).",
+   "license": "MIT",
+diff --git a/packages/lapp/docs/api.md b/packages/lapp/docs/api.md
+index 0a67f24feb4aea030ac55344de335bf3c7049ff1..3a70a58deb50b52a3309a82949d08f098a8a0b89 100644
+--- a/packages/lapp/docs/api.md
++++ b/packages/lapp/docs/api.md
+@@ -219,6 +219,25 @@ lock, and explicit provider-test/model-refresh authority. There is not yet a
+ stable supported GUI release; the standalone Manager repository contains the
+ current Tauri Alpha implementation.
+ 
++### `createNodeLappManagerHostV2(options?) -> LappManagerBridgeV2`
++
++Same embedding options as V1, plus optional `now` for preview expiry tests.
++Handshake protocol version is `2`. V1 methods, including
++`transact({ operation: { type: "models.refresh" } })` and `testConnection()`,
++keep their existing contracts.
++
++Additional methods:
++
++| Method | Result |
++|--------|--------|
++| `previewModels(request)` | Preview remote model additions for one provider. `request` is `{ operationId, providerId, expectedRevision }`. Stale revisions fail before Vault or network I/O. Network work does not hold the writer lock. The proposal is discarded if the revision changes after the fetch. |
++| `applyModels(request)` | Apply a one-time preview (`previewId` + `expectedRevision`) with a locked compare-and-swap write and no network I/O. Only appends unknown model IDs and fills missing display names. |
++| `cancelPreview(request)` | Abort an in-flight preview or drop a stored proposal by `operationId`. |
++| `testConnectionV2(request)` | Same small request as V1 `testConnection`, plus `expectedRevision`. The revision is checked before Vault/network access and again after the response. |
++
++Stored proposals last at most five minutes, at most eight per host, and are
++one-time-use.
++
+ ### `createNodeLappManagerHost(options?) -> LappManagerBridgeV1`
+ 
+ Options are `{ path?, vault?, env?, fetchImpl?, lock? }`. The profile root is
+@@ -331,6 +350,8 @@ are rejected.
+ | `stream(input)` | `AsyncIterable<LappStreamEventUnion>` |
+ | `executeWithTools(input, tools, handlers, options?)` | `Promise<ExecuteWithToolsResult>` |
+ | `testConnection()` | `Promise<TestConnectionResult>`; failures include a stable optional `code` when available. |
++| `chatNormalized(input)` | Normalized multimodal/tool response (`text` plus ordered `parts`). |
++| `streamNormalized(input)` | Normalized stream events; invalid tool-call argument JSON fails instead of becoming `{}`. |
+ 
+ `ChatInput` contains `messages`, optional `temperature`, `maxTokens`, `extra`,
+ `stream`, `tools`, `toolChoice`, and `signal`. Reserved `extra` keys cannot
+diff --git a/packages/lapp/package.json b/packages/lapp/package.json
+index cae57875746563a70d4804b320338ea82b18116d..7b5e3c1341096a345da81e2dc6e7f432f63326f6 100644
+--- a/packages/lapp/package.json
++++ b/packages/lapp/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "@openlapp/lapp",
+-  "version": "0.1.2",
++  "version": "0.1.3-copilot.0",
+   "description": "TypeScript SDK for LAPP (Local AI Provider Profiles): read, validate, write, manage, and send requests to configured providers.",
+   "license": "MIT",
+   "type": "module",
+diff --git a/packages/lapp/src/client/index.ts b/packages/lapp/src/client/index.ts
+index 344e884acab2e8b126061811dfd793de926874e3..ccc2770c022c9796c7f1adae8ab37768ecaa388a 100644
+--- a/packages/lapp/src/client/index.ts
++++ b/packages/lapp/src/client/index.ts
+@@ -35,6 +35,15 @@ import {
+   createCredentialResolver,
+   resolveAuthConfig,
+ } from "../secret/index.js";
++import {
++  buildNormalizedRequest,
++  parseNormalizedResponse,
++  parseNormalizedStream,
++  validateNormalizedChatInput,
++  type NormalizedChatInput,
++  type NormalizedChatResponse,
++  type NormalizedStreamEvent,
++} from "./normalized/index.js";
+ 
+ export type {
+   ChatInput,
+@@ -46,6 +55,31 @@ export type {
+   ToolDefinition,
+   ParsedToolCall,
+ } from "./adapter.js";
++export {
++  NORMALIZED_IMAGE_MEDIA_TYPES,
++  NORMALIZED_TEXT_MEDIA_TYPES,
++  NormalizedChatError,
++  mapNormalizedToolChoice,
++  parseToolArgumentsStrict,
++  validateNormalizedChatInput,
++  validateNormalizedMessage,
++  type NormalizedAssistantPart,
++  type NormalizedChatInput,
++  type NormalizedChatResponse,
++  type NormalizedDataPart,
++  type NormalizedImageMediaType,
++  type NormalizedImagePart,
++  type NormalizedMessage,
++  type NormalizedStreamEvent,
++  type NormalizedSystemPart,
++  type NormalizedTextMediaType,
++  type NormalizedTextPart,
++  type NormalizedToolCallPart,
++  type NormalizedToolChoice,
++  type NormalizedToolResultPart,
++  type NormalizedUserNormalPart,
++  type NormalizedUserPart,
++} from "./normalized/index.js";
+ 
+ const ADAPTERS: Record<string, ProtocolAdapter> = {
+   "openai-chat-completions": openaiChatCompletionsAdapter,
+@@ -100,6 +134,8 @@ export interface LappClient {
+   chat(input: ChatInput): Promise<LappResponse>;
+   rawChat(input: ChatInput): Promise<unknown>;
+   stream(input: ChatInput): AsyncIterable<LappStreamEventUnion>;
++  chatNormalized(input: NormalizedChatInput): Promise<NormalizedChatResponse>;
++  streamNormalized(input: NormalizedChatInput): AsyncIterable<NormalizedStreamEvent>;
+   executeWithTools(
+     input: ChatInput,
+     tools: ToolDefinition[],
+@@ -378,6 +414,79 @@ export function createLappClient(options: CreateClientOptions): LappClient {
+ 
+     stream,
+ 
++    async chatNormalized(input: NormalizedChatInput): Promise<NormalizedChatResponse> {
++      if (input.stream) {
++        throw new Error(
++          `chatNormalized() does not support stream: true; use client.streamNormalized() to receive streaming deltas`,
++        );
++      }
++      validateNormalizedChatInput(input);
++      input.signal?.throwIfAborted();
++      const { ctx, sensitiveValues } = await requestContext();
++      try {
++        const req = buildNormalizedRequest(adapter, input, ctx);
++        if (plan.credentialBinding) {
++          assertCredentialRequestOrigin(plan.credentialBinding, req.url);
++        }
++        const url = applyQueryAuth(ctx, req.url);
++        const resp = await fetchProvider(url, {
++          method: req.method,
++          headers: req.headers,
++          body: JSON.stringify(req.body),
++          redirect: "error",
++          signal: input.signal,
++        }, sensitiveValues);
++        const text = await readResponseText(resp, sensitiveValues);
++        const raw = parseResponseText(text);
++        if (!resp.ok) {
++          throw providerHttpError(ctx, resp, text, raw, sensitiveValues);
++        }
++        const response = parseNormalizedResponse(protocol, raw, ctx);
++        return redactSuccessfulSecrets
++          ? redactRawObject(response, sensitiveValues) as NormalizedChatResponse
++          : response;
++      } catch (error) {
++        throw redactThrown(error, sensitiveValues);
++      }
++    },
++
++    async *streamNormalized(input: NormalizedChatInput): AsyncIterable<NormalizedStreamEvent> {
++      if (!adapter.parseStream) {
++        throw new StreamingUnsupportedError(plan.modelId);
++      }
++      validateNormalizedChatInput(input);
++      input.signal?.throwIfAborted();
++      const { ctx, sensitiveValues } = await requestContext();
++      try {
++        const req = buildNormalizedRequest(adapter, { ...input, stream: true }, ctx);
++        if (plan.credentialBinding) {
++          assertCredentialRequestOrigin(plan.credentialBinding, req.url);
++        }
++        const url = applyQueryAuth(ctx, req.url);
++        const resp = await fetchProvider(url, {
++          method: req.method,
++          headers: req.headers,
++          body: JSON.stringify(req.body),
++          redirect: "error",
++          signal: input.signal,
++        }, sensitiveValues);
++        if (!resp.ok) {
++          const text = await readResponseText(resp, sensitiveValues);
++          throw providerHttpError(ctx, resp, text, parseResponseText(text), sensitiveValues);
++        }
++        if (!resp.body) {
++          throw new Error(`provider ${ctx.providerId} returned an empty stream body`);
++        }
++        for await (const event of parseNormalizedStream(adapter.parseStream(resp.body, ctx))) {
++          yield redactSuccessfulSecrets || event.kind === "error"
++            ? redactRawObject(event, sensitiveValues) as NormalizedStreamEvent
++            : event;
++        }
++      } catch (error) {
++        throw redactThrown(error, sensitiveValues);
++      }
++    },
++
+     async executeWithTools(
+       input: ChatInput,
+       tools: ToolDefinition[],
+diff --git a/packages/lapp/src/client/normalized/index.ts b/packages/lapp/src/client/normalized/index.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c7d388cd803ddc1c3c4da606464382038ec5f9d
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/index.ts
+@@ -0,0 +1,30 @@
++export {
++  NORMALIZED_IMAGE_MEDIA_TYPES,
++  NORMALIZED_TEXT_MEDIA_TYPES,
++  NormalizedChatError,
++  type NormalizedAssistantPart,
++  type NormalizedChatInput,
++  type NormalizedChatResponse,
++  type NormalizedDataPart,
++  type NormalizedImageMediaType,
++  type NormalizedImagePart,
++  type NormalizedMessage,
++  type NormalizedStreamEvent,
++  type NormalizedSystemPart,
++  type NormalizedTextMediaType,
++  type NormalizedTextPart,
++  type NormalizedToolCallPart,
++  type NormalizedToolChoice,
++  type NormalizedToolResultPart,
++  type NormalizedUserNormalPart,
++  type NormalizedUserPart,
++} from "./types.js";
++export {
++  decodeUtf8Data,
++  parseToolArgumentsStrict,
++  validateNormalizedChatInput,
++  validateNormalizedMessage,
++} from "./validate.js";
++export { mapNormalizedToolChoice } from "./tool-choice.js";
++export { buildNormalizedRequest } from "./map.js";
++export { parseNormalizedResponse, parseNormalizedStream } from "./parse.js";
+diff --git a/packages/lapp/src/client/normalized/map.ts b/packages/lapp/src/client/normalized/map.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6eccd5995b726356ed8f841123f1ea10bd1a116f
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/map.ts
+@@ -0,0 +1,198 @@
++import type { AdapterContext, AdapterRequest, ChatInput, ProtocolAdapter } from "../adapter.js";
++import { joinTextAndData } from "./validate.js";
++import { mapNormalizedToolChoice } from "./tool-choice.js";
++import type {
++  NormalizedAssistantPart,
++  NormalizedChatInput,
++  NormalizedImagePart,
++  NormalizedMessage,
++  NormalizedToolResultPart,
++  NormalizedUserNormalPart,
++} from "./types.js";
++
++function toBase64(data: Uint8Array): string {
++  return Buffer.from(data).toString("base64");
++}
++
++function imageDataUrl(part: NormalizedImagePart): string {
++  return `data:${part.mediaType};base64,${toBase64(part.data)}`;
++}
++
++function toolResultText(part: NormalizedToolResultPart): string {
++  return joinTextAndData(part.content);
++}
++
++function openaiChatContent(parts: NormalizedUserNormalPart[]): string | Array<Record<string, unknown>> {
++  if (parts.length === 1 && parts[0]!.type === "text") return parts[0]!.text;
++  return parts.map((part) => {
++    if (part.type === "image") {
++      return { type: "image_url", image_url: { url: imageDataUrl(part) } };
++    }
++    return { type: "text", text: part.type === "text" ? part.text : joinTextAndData([part]) };
++  });
++}
++
++function openaiChatMessages(messages: NormalizedMessage[]): Array<Record<string, unknown>> {
++  return messages.flatMap((message) => {
++    if (message.role === "system") {
++      return [{ role: "system", content: joinTextAndData(message.content) }];
++    }
++    if (message.role === "user") {
++      if (message.content.every((part) => part.type === "tool-result")) {
++        return (message.content as NormalizedToolResultPart[]).map((part) => ({
++          role: "tool",
++          tool_call_id: part.toolCallId,
++          content: toolResultText(part),
++        }));
++      }
++      return [{ role: "user", content: openaiChatContent(message.content as NormalizedUserNormalPart[]) }];
++    }
++    const text = message.content
++      .filter((part): part is Extract<NormalizedAssistantPart, { type: "text" }> => part.type === "text")
++      .map((part) => part.text)
++      .join("");
++    const toolCalls = message.content.filter((part) => part.type === "tool-call");
++    if (toolCalls.length === 0) return [{ role: "assistant", content: text }];
++    return [{
++      role: "assistant",
++      content: text,
++      tool_calls: toolCalls.map((part) => ({
++        id: part.id,
++        type: "function",
++        function: { name: part.name, arguments: JSON.stringify(part.arguments) },
++      })),
++    }];
++  });
++}
++
++function openaiResponsesItems(messages: NormalizedMessage[]): Array<Record<string, unknown>> {
++  return messages.flatMap((message): Array<Record<string, unknown>> => {
++    if (message.role === "system") return [];
++    if (message.role === "user") {
++      if (message.content.every((part) => part.type === "tool-result")) {
++        return (message.content as NormalizedToolResultPart[]).map((part) => ({
++          type: "function_call_output",
++          call_id: part.toolCallId,
++          output: toolResultText(part),
++        }));
++      }
++      const parts = message.content as NormalizedUserNormalPart[];
++      return [{
++        role: "user",
++        content: parts.map((part) => (
++          part.type === "image"
++            ? { type: "input_image", image_url: imageDataUrl(part) }
++            : { type: "input_text", text: part.type === "text" ? part.text : joinTextAndData([part]) }
++        )),
++      }];
++    }
++    const text = message.content
++      .filter((part): part is Extract<NormalizedAssistantPart, { type: "text" }> => part.type === "text")
++      .map((part) => part.text)
++      .join("");
++    const toolCalls = message.content.filter((part) => part.type === "tool-call");
++    return [
++      ...(text ? [{ role: "assistant", content: text }] : []),
++      ...toolCalls.map((part) => ({
++        type: "function_call",
++        call_id: part.id,
++        name: part.name,
++        arguments: JSON.stringify(part.arguments),
++      })),
++    ];
++  });
++}
++
++function anthropicMessages(messages: NormalizedMessage[]): Array<Record<string, unknown>> {
++  return messages.flatMap((message) => {
++    if (message.role === "system") return [];
++    if (message.role === "user") {
++      if (message.content.every((part) => part.type === "tool-result")) {
++        return [{
++          role: "user",
++          content: (message.content as NormalizedToolResultPart[]).map((part) => ({
++            type: "tool_result",
++            tool_use_id: part.toolCallId,
++            content: toolResultText(part),
++          })),
++        }];
++      }
++      return [{
++        role: "user",
++        content: (message.content as NormalizedUserNormalPart[]).map((part) => (
++          part.type === "image"
++            ? {
++                type: "image",
++                source: {
++                  type: "base64",
++                  media_type: part.mediaType,
++                  data: toBase64(part.data),
++                },
++              }
++            : { type: "text", text: part.type === "text" ? part.text : joinTextAndData([part]) }
++        )),
++      }];
++    }
++    const blocks: Array<Record<string, unknown>> = [];
++    for (const part of message.content) {
++      if (part.type === "text" && part.text.length > 0) {
++        blocks.push({ type: "text", text: part.text });
++      }
++      if (part.type === "tool-call") {
++        blocks.push({ type: "tool_use", id: part.id, name: part.name, input: part.arguments });
++      }
++    }
++    return [{ role: "assistant", content: blocks }];
++  });
++}
++
++function applyMappedBody(protocol: string, body: Record<string, unknown>, input: NormalizedChatInput): void {
++  const systemText = input.messages
++    .filter((message) => message.role === "system")
++    .map((message) => joinTextAndData(message.content))
++    .join("\n\n");
++  if (protocol === "openai-chat-completions") {
++    body.messages = openaiChatMessages(input.messages);
++    return;
++  }
++  if (protocol === "openai-responses") {
++    body.input = openaiResponsesItems(input.messages);
++    if (systemText) body.instructions = systemText;
++    else delete body.instructions;
++    return;
++  }
++  if (protocol === "anthropic-messages") {
++    body.messages = anthropicMessages(input.messages);
++    if (systemText) body.system = systemText;
++    else delete body.system;
++    return;
++  }
++  throw new Error(`unsupported protocol: ${protocol}`);
++}
++
++export function buildNormalizedRequest(
++  adapter: ProtocolAdapter,
++  input: NormalizedChatInput,
++  ctx: AdapterContext,
++): AdapterRequest {
++  const placeholder: ChatInput = {
++    messages: [{ role: "user", content: " " }],
++    ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
++    ...(input.maxTokens !== undefined ? { maxTokens: input.maxTokens } : {}),
++    ...(input.stopSequences !== undefined ? { stopSequences: input.stopSequences } : {}),
++    ...(input.parallelToolCalls !== undefined ? { parallelToolCalls: input.parallelToolCalls } : {}),
++    ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
++    ...(input.promptCacheKey !== undefined ? { promptCacheKey: input.promptCacheKey } : {}),
++    ...(input.promptCacheRetention !== undefined ? { promptCacheRetention: input.promptCacheRetention } : {}),
++    ...(input.extra !== undefined ? { extra: input.extra } : {}),
++    ...(input.stream !== undefined ? { stream: input.stream } : {}),
++    ...(input.tools !== undefined ? { tools: input.tools } : {}),
++    ...(input.toolChoice !== undefined
++      ? { toolChoice: mapNormalizedToolChoice(input.toolChoice, adapter.protocol) }
++      : {}),
++    ...(input.signal !== undefined ? { signal: input.signal } : {}),
++  };
++  const request = adapter.buildRequest(placeholder, ctx);
++  applyMappedBody(adapter.protocol, request.body as Record<string, unknown>, input);
++  return request;
++}
+diff --git a/packages/lapp/src/client/normalized/parse.ts b/packages/lapp/src/client/normalized/parse.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..4c93eb3a4f6c2c471be8d0bed2afc051d4040837
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/parse.ts
+@@ -0,0 +1,219 @@
++import type { AdapterContext, LappStreamEventUnion } from "../adapter.js";
++import { isRecord } from "../adapter.js";
++import { parseToolArgumentsStrict, validateNormalizedMessage } from "./validate.js";
++import {
++  NormalizedChatError,
++  type NormalizedAssistantPart,
++  type NormalizedChatResponse,
++  type NormalizedStreamEvent,
++} from "./types.js";
++
++function finish(parts: NormalizedAssistantPart[], ctx: AdapterContext, raw: unknown, extras: {
++  model?: string;
++  finishReason?: string;
++  usage?: NormalizedChatResponse["usage"];
++}): NormalizedChatResponse {
++  validateNormalizedMessage({ role: "assistant", content: parts });
++  return {
++    text: parts.filter((part) => part.type === "text").map((part) => part.text).join(""),
++    parts,
++    provider: ctx.providerId,
++    model: extras.model ?? ctx.model,
++    protocol: ctx.protocol,
++    ...(extras.finishReason !== undefined ? { finishReason: extras.finishReason } : {}),
++    ...(extras.usage !== undefined ? { usage: extras.usage } : {}),
++    raw,
++  };
++}
++
++function pushAssistantPart(parts: NormalizedAssistantPart[], part: NormalizedAssistantPart): void {
++  if (part.type === "text" && parts.some((existing) => existing.type === "tool-call")) {
++    throw new NormalizedChatError("assistant text is not allowed after the first tool call");
++  }
++  if (part.type === "text" && part.text.length === 0 && parts.some((existing) => existing.type === "text")) {
++    return;
++  }
++  parts.push(part);
++}
++
++export function parseNormalizedResponse(
++  protocol: string,
++  raw: unknown,
++  ctx: AdapterContext,
++): NormalizedChatResponse {
++  if (protocol === "openai-chat-completions") {
++    if (!isRecord(raw) || !Array.isArray(raw.choices) || !isRecord(raw.choices[0])) {
++      throw new NormalizedChatError("invalid openai-chat-completions response");
++    }
++    const choice = raw.choices[0];
++    const message = isRecord(choice.message) ? choice.message : undefined;
++    if (!message) throw new NormalizedChatError("invalid openai-chat-completions response");
++    const parts: NormalizedAssistantPart[] = [];
++    if (Array.isArray(message.content)) {
++      for (const item of message.content) {
++        if (!isRecord(item) || typeof item.type !== "string") {
++          throw new NormalizedChatError("invalid openai-chat-completions response");
++        }
++        if (item.type === "text" || item.type === "output_text") {
++          if (typeof item.text !== "string") {
++            throw new NormalizedChatError("invalid openai-chat-completions response");
++          }
++          pushAssistantPart(parts, { type: "text", text: item.text });
++          continue;
++        }
++        throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++      }
++    } else if (typeof message.content === "string" && message.content.length > 0) {
++      pushAssistantPart(parts, { type: "text", text: message.content });
++    } else if (message.content !== undefined && message.content !== null && typeof message.content !== "string") {
++      throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++    }
++    if (message.tool_calls !== undefined) {
++      if (!Array.isArray(message.tool_calls)) {
++        throw new NormalizedChatError("invalid openai-chat-completions response");
++      }
++      for (const call of message.tool_calls) {
++        if (
++          !isRecord(call)
++          || typeof call.id !== "string"
++          || !isRecord(call.function)
++          || typeof call.function.name !== "string"
++          || typeof call.function.arguments !== "string"
++        ) {
++          throw new NormalizedChatError("invalid openai-chat-completions response");
++        }
++        pushAssistantPart(parts, {
++          type: "tool-call",
++          id: call.id,
++          name: call.function.name,
++          arguments: parseToolArgumentsStrict(call.function.arguments),
++        });
++      }
++    }
++    if (parts.length === 0) parts.push({ type: "text", text: "" });
++    return finish(parts, ctx, raw, {
++      model: typeof raw.model === "string" ? raw.model : undefined,
++      finishReason: typeof choice.finish_reason === "string" ? choice.finish_reason : undefined,
++    });
++  }
++
++  if (protocol === "openai-responses") {
++    if (!isRecord(raw) || !Array.isArray(raw.output)) {
++      throw new NormalizedChatError("invalid openai-responses response");
++    }
++    const parts: NormalizedAssistantPart[] = [];
++    for (const item of raw.output) {
++      if (!isRecord(item) || typeof item.type !== "string") {
++        throw new NormalizedChatError("invalid openai-responses response");
++      }
++      if (item.type === "message" || item.type === "output_text") {
++        const contents = Array.isArray(item.content) ? item.content : [item];
++        for (const content of contents) {
++          if (!isRecord(content) || typeof content.type !== "string") {
++            throw new NormalizedChatError("invalid openai-responses response");
++          }
++          if (content.type === "output_text" || content.type === "text" || content.type === "message_output_text") {
++            if (typeof content.text !== "string") {
++              throw new NormalizedChatError("invalid openai-responses response");
++            }
++            pushAssistantPart(parts, { type: "text", text: content.text });
++            continue;
++          }
++          throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++        }
++        continue;
++      }
++      if (item.type === "function_call") {
++        if (typeof item.call_id !== "string" || typeof item.name !== "string" || typeof item.arguments !== "string") {
++          throw new NormalizedChatError("invalid openai-responses response");
++        }
++        pushAssistantPart(parts, {
++          type: "tool-call",
++          id: item.call_id,
++          name: item.name,
++          arguments: parseToolArgumentsStrict(item.arguments),
++        });
++        continue;
++      }
++      if (item.type === "function_call_output" || item.type === "input_image" || item.type === "image") {
++        throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++      }
++    }
++    if (parts.length === 0 && typeof raw.output_text === "string") {
++      parts.push({ type: "text", text: raw.output_text });
++    }
++    if (parts.length === 0) parts.push({ type: "text", text: "" });
++    return finish(parts, ctx, raw, {
++      model: typeof raw.model === "string" ? raw.model : undefined,
++      finishReason: typeof raw.status === "string" ? raw.status : undefined,
++    });
++  }
++
++  if (protocol === "anthropic-messages") {
++    if (!isRecord(raw) || !Array.isArray(raw.content)) {
++      throw new NormalizedChatError("invalid anthropic-messages response");
++    }
++    const parts: NormalizedAssistantPart[] = [];
++    for (const item of raw.content) {
++      if (!isRecord(item) || typeof item.type !== "string") {
++        throw new NormalizedChatError("invalid anthropic-messages response");
++      }
++      if (item.type === "text") {
++        if (typeof item.text !== "string") {
++          throw new NormalizedChatError("invalid anthropic-messages response");
++        }
++        pushAssistantPart(parts, { type: "text", text: item.text });
++        continue;
++      }
++      if (item.type === "tool_use") {
++        if (typeof item.id !== "string" || typeof item.name !== "string") {
++          throw new NormalizedChatError("invalid anthropic-messages response");
++        }
++        if (!isRecord(item.input)) {
++          throw new NormalizedChatError("tool-call arguments must be a JSON object");
++        }
++        pushAssistantPart(parts, {
++          type: "tool-call",
++          id: item.id,
++          name: item.name,
++          arguments: item.input,
++        });
++        continue;
++      }
++      throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++    }
++    if (parts.length === 0) parts.push({ type: "text", text: "" });
++    return finish(parts, ctx, raw, {
++      model: typeof raw.model === "string" ? raw.model : undefined,
++      finishReason: typeof raw.stop_reason === "string" ? raw.stop_reason : undefined,
++    });
++  }
++
++  throw new NormalizedChatError(`unsupported protocol: ${protocol}`);
++}
++
++export async function* parseNormalizedStream(
++  events: AsyncIterable<LappStreamEventUnion>,
++): AsyncGenerator<NormalizedStreamEvent> {
++  let sawToolCall = false;
++  for await (const event of events) {
++    if (event.kind === "delta") {
++      if (sawToolCall) {
++        throw new NormalizedChatError("assistant text is not allowed after the first tool call");
++      }
++      yield event;
++      continue;
++    }
++    if (event.kind === "tool-call") {
++      sawToolCall = true;
++      yield {
++        kind: "tool-call",
++        id: event.id,
++        name: event.name,
++        arguments: parseToolArgumentsStrict(event.arguments),
++      };
++      continue;
++    }
++    yield event;
++  }
++}
+diff --git a/packages/lapp/src/client/normalized/tool-choice.ts b/packages/lapp/src/client/normalized/tool-choice.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..36cf7be2120660622abe1e40f7dffc78db5327e0
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/tool-choice.ts
+@@ -0,0 +1,20 @@
++import type { NormalizedToolChoice } from "./types.js";
++
++export function mapNormalizedToolChoice(
++  choice: NormalizedToolChoice | undefined,
++  protocol: string,
++): unknown {
++  if (choice === undefined) return undefined;
++  if (protocol === "anthropic-messages") {
++    if (choice === "auto") return { type: "auto" };
++    if (choice === "required") return { type: "any" };
++    if (choice === "none") return { type: "none" };
++    return { type: "tool", name: choice.name };
++  }
++  if (protocol === "openai-responses") {
++    if (typeof choice === "string") return choice;
++    return { type: "function", name: choice.name };
++  }
++  if (typeof choice === "string") return choice;
++  return { type: "function", function: { name: choice.name } };
++}
+diff --git a/packages/lapp/src/client/normalized/types.ts b/packages/lapp/src/client/normalized/types.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..a75011d18e999e8a5fd6385313d2c1374b6e2bc5
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/types.ts
+@@ -0,0 +1,125 @@
++import type { ToolDefinition } from "../adapter.js";
++
++export const NORMALIZED_TEXT_MEDIA_TYPES = [
++  "text/plain",
++  "text/markdown",
++  "application/json",
++] as const;
++
++export const NORMALIZED_IMAGE_MEDIA_TYPES = [
++  "image/png",
++  "image/jpeg",
++  "image/webp",
++  "image/gif",
++] as const;
++
++export type NormalizedTextMediaType = (typeof NORMALIZED_TEXT_MEDIA_TYPES)[number];
++export type NormalizedImageMediaType = (typeof NORMALIZED_IMAGE_MEDIA_TYPES)[number];
++
++export type NormalizedToolChoice =
++  | "auto"
++  | "required"
++  | "none"
++  | { type: "named"; name: string };
++
++export interface NormalizedTextPart {
++  type: "text";
++  text: string;
++}
++
++export interface NormalizedDataPart {
++  type: "data";
++  mediaType: NormalizedTextMediaType;
++  data: Uint8Array;
++}
++
++export interface NormalizedImagePart {
++  type: "image";
++  mediaType: NormalizedImageMediaType;
++  data: Uint8Array;
++}
++
++export interface NormalizedToolCallPart {
++  type: "tool-call";
++  id: string;
++  name: string;
++  arguments: Record<string, unknown>;
++}
++
++export interface NormalizedToolResultPart {
++  type: "tool-result";
++  toolCallId: string;
++  content: Array<NormalizedTextPart | NormalizedDataPart>;
++}
++
++export type NormalizedUserNormalPart =
++  | NormalizedTextPart
++  | NormalizedDataPart
++  | NormalizedImagePart;
++
++export type NormalizedUserPart = NormalizedUserNormalPart | NormalizedToolResultPart;
++export type NormalizedAssistantPart = NormalizedTextPart | NormalizedToolCallPart;
++export type NormalizedSystemPart = NormalizedTextPart | NormalizedDataPart;
++
++export type NormalizedMessage =
++  | { role: "system"; content: NormalizedSystemPart[] }
++  | { role: "user"; content: NormalizedUserPart[] }
++  | { role: "assistant"; content: NormalizedAssistantPart[] };
++
++export interface NormalizedChatInput {
++  messages: NormalizedMessage[];
++  temperature?: number;
++  maxTokens?: number;
++  stopSequences?: string[];
++  parallelToolCalls?: boolean;
++  reasoning?: Record<string, unknown>;
++  promptCacheKey?: string;
++  promptCacheRetention?: string;
++  extra?: Record<string, unknown>;
++  stream?: boolean;
++  tools?: ToolDefinition[];
++  toolChoice?: NormalizedToolChoice;
++  signal?: AbortSignal;
++}
++
++export interface NormalizedChatResponse {
++  text: string;
++  parts: NormalizedAssistantPart[];
++  provider: string;
++  model: string;
++  protocol: string;
++  usage?: {
++    inputTokens?: number;
++    outputTokens?: number;
++    totalTokens?: number;
++    cacheReadInputTokens?: number;
++    cacheWriteInputTokens?: number;
++    reasoningTokens?: number;
++  };
++  finishReason?: string;
++  raw: unknown;
++}
++
++export type NormalizedStreamEvent =
++  | { kind: "delta"; text: string }
++  | { kind: "tool-call"; id: string; name: string; arguments: Record<string, unknown> }
++  | {
++      kind: "usage";
++      inputTokens?: number;
++      outputTokens?: number;
++      totalTokens?: number;
++      cacheReadInputTokens?: number;
++      cacheWriteInputTokens?: number;
++      reasoningTokens?: number;
++    }
++  | { kind: "finish"; reason: string }
++  | { kind: "error"; message: string };
++
++export class NormalizedChatError extends Error {
++  override name = "NormalizedChatError";
++
++  constructor(message: string) {
++    super(message);
++    this.name = "NormalizedChatError";
++  }
++}
+diff --git a/packages/lapp/src/client/normalized/validate.ts b/packages/lapp/src/client/normalized/validate.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..e816348464dbaba7c406d7b14de6fdbd908be651
+--- /dev/null
++++ b/packages/lapp/src/client/normalized/validate.ts
+@@ -0,0 +1,243 @@
++import { isRecord } from "../adapter.js";
++import {
++  NORMALIZED_IMAGE_MEDIA_TYPES,
++  NORMALIZED_TEXT_MEDIA_TYPES,
++  NormalizedChatError,
++  type NormalizedChatInput,
++  type NormalizedImageMediaType,
++  type NormalizedMessage,
++  type NormalizedTextMediaType,
++  type NormalizedToolChoice,
++} from "./types.js";
++
++const TEXT_MEDIA = new Set<string>(NORMALIZED_TEXT_MEDIA_TYPES);
++const IMAGE_MEDIA = new Set<string>(NORMALIZED_IMAGE_MEDIA_TYPES);
++
++export function isNormalizedToolChoice(value: unknown): value is NormalizedToolChoice {
++  if (value === "auto" || value === "required" || value === "none") return true;
++  return isRecord(value) && value.type === "named" && typeof value.name === "string" && value.name.length > 0;
++}
++
++export function decodeUtf8Data(data: Uint8Array, mediaType: string): string {
++  let text: string;
++  try {
++    text = new TextDecoder("utf-8", { fatal: true }).decode(data);
++  } catch {
++    throw new NormalizedChatError(`${mediaType} data must be valid UTF-8`);
++  }
++  if (mediaType === "application/json") {
++    try {
++      JSON.parse(text);
++    } catch {
++      throw new NormalizedChatError("application/json data must contain valid JSON");
++    }
++  }
++  return text;
++}
++
++export function parseToolArgumentsStrict(raw: string): Record<string, unknown> {
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch {
++    throw new NormalizedChatError("tool-call arguments must be a JSON object");
++  }
++  if (!isRecord(parsed)) {
++    throw new NormalizedChatError("tool-call arguments must be a JSON object");
++  }
++  return parsed;
++}
++
++function isTextMedia(value: unknown): value is NormalizedTextMediaType {
++  return typeof value === "string" && TEXT_MEDIA.has(value);
++}
++
++function isImageMedia(value: unknown): value is NormalizedImageMediaType {
++  return typeof value === "string" && IMAGE_MEDIA.has(value);
++}
++
++function isBytes(value: unknown): value is Uint8Array {
++  return value instanceof Uint8Array;
++}
++
++function matchesImageMagic(mediaType: NormalizedImageMediaType, data: Uint8Array): boolean {
++  if (mediaType === "image/png") {
++    return data.length >= 8
++      && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
++      && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a;
++  }
++  if (mediaType === "image/jpeg") {
++    return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
++  }
++  if (mediaType === "image/gif") {
++    return data.length >= 6
++      && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38
++      && (data[4] === 0x37 || data[4] === 0x39) && data[5] === 0x61;
++  }
++  return data.length >= 12
++    && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
++    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50;
++}
++
++function assertTextOrDataPart(part: unknown, label: string): void {
++  if (!isRecord(part) || typeof part.type !== "string") {
++    throw new NormalizedChatError(`${label} part is invalid`);
++  }
++  if (part.type === "text") {
++    if (typeof part.text !== "string") {
++      throw new NormalizedChatError(`${label} text part must include a string`);
++    }
++    return;
++  }
++  if (part.type === "data") {
++    if (!isTextMedia(part.mediaType) || !isBytes(part.data)) {
++      throw new NormalizedChatError(`${label} data part must be UTF-8 text/plain, text/markdown, or application/json`);
++    }
++    decodeUtf8Data(part.data, part.mediaType);
++    return;
++  }
++  if (part.type === "image") {
++    throw new NormalizedChatError(`${label} cannot include image parts`);
++  }
++  throw new NormalizedChatError(`${label} part type "${part.type}" is not allowed`);
++}
++
++function assertImagePart(part: Record<string, unknown>): void {
++  if (!isImageMedia(part.mediaType) || !isBytes(part.data) || part.data.length === 0) {
++    throw new NormalizedChatError("image parts must be non-empty PNG, JPEG, WebP, or GIF bytes");
++  }
++  if (!matchesImageMagic(part.mediaType, part.data)) {
++    throw new NormalizedChatError(`image bytes do not match media type ${part.mediaType}`);
++  }
++}
++
++function assertUserContent(content: unknown): void {
++  if (!Array.isArray(content) || content.length === 0) {
++    throw new NormalizedChatError("user messages require a non-empty content array");
++  }
++  const kinds = content.map((part) => {
++    if (!isRecord(part) || typeof part.type !== "string") {
++      throw new NormalizedChatError("user content part is invalid");
++    }
++    return part.type;
++  });
++  const hasToolResult = kinds.some((type) => type === "tool-result");
++  const hasNormal = kinds.some((type) => type === "text" || type === "data" || type === "image");
++  if (hasToolResult && hasNormal) {
++    throw new NormalizedChatError("user content cannot mix normal parts with tool results");
++  }
++  if (hasToolResult) {
++    for (const part of content) {
++      if (!isRecord(part) || part.type !== "tool-result" || typeof part.toolCallId !== "string") {
++        throw new NormalizedChatError("tool-result parts require a toolCallId");
++      }
++      if (!Array.isArray(part.content) || part.content.length === 0) {
++        throw new NormalizedChatError("tool-result content must be a non-empty text or data collection");
++      }
++      for (const inner of part.content) {
++        if (isRecord(inner) && inner.type === "image") {
++          throw new NormalizedChatError("image tool results are not supported");
++        }
++        assertTextOrDataPart(inner, "tool-result");
++      }
++    }
++    return;
++  }
++  for (const part of content) {
++    if (!isRecord(part)) throw new NormalizedChatError("user content part is invalid");
++    if (part.type === "text" || part.type === "data") {
++      assertTextOrDataPart(part, "user");
++      continue;
++    }
++    if (part.type === "image") {
++      assertImagePart(part);
++      continue;
++    }
++    throw new NormalizedChatError(`user content part type "${String(part.type)}" is not allowed`);
++  }
++}
++
++function assertAssistantContent(content: unknown): void {
++  if (!Array.isArray(content) || content.length === 0) {
++    throw new NormalizedChatError("assistant messages require a non-empty content array");
++  }
++  let sawToolCall = false;
++  for (const part of content) {
++    if (!isRecord(part) || typeof part.type !== "string") {
++      throw new NormalizedChatError("assistant content part is invalid");
++    }
++    if (part.type === "data" || part.type === "tool-result" || part.type === "image") {
++      throw new NormalizedChatError("assistant output cannot include data, image, or tool-result parts");
++    }
++    if (part.type === "text") {
++      if (sawToolCall) {
++        throw new NormalizedChatError("assistant text is not allowed after the first tool call");
++      }
++      if (typeof part.text !== "string") {
++        throw new NormalizedChatError("assistant text part must include a string");
++      }
++      continue;
++    }
++    if (part.type === "tool-call") {
++      if (typeof part.id !== "string" || typeof part.name !== "string" || !isRecord(part.arguments)) {
++        throw new NormalizedChatError("assistant tool-call parts require id, name, and object arguments");
++      }
++      sawToolCall = true;
++      continue;
++    }
++    throw new NormalizedChatError(`assistant content part type "${part.type}" is not allowed`);
++  }
++}
++
++function assertSystemContent(content: unknown): void {
++  if (!Array.isArray(content) || content.length === 0) {
++    throw new NormalizedChatError("system messages require a non-empty content array");
++  }
++  for (const part of content) {
++    if (isRecord(part) && (part.type === "image" || part.type === "tool-call" || part.type === "tool-result")) {
++      throw new NormalizedChatError("system messages may only contain text or UTF-8 data parts");
++    }
++    assertTextOrDataPart(part, "system");
++  }
++}
++
++export function validateNormalizedMessage(message: unknown): asserts message is NormalizedMessage {
++  if (!isRecord(message) || typeof message.role !== "string") {
++    throw new NormalizedChatError("normalized message is invalid");
++  }
++  if (message.role === "system") {
++    assertSystemContent(message.content);
++    return;
++  }
++  if (message.role === "user") {
++    assertUserContent(message.content);
++    return;
++  }
++  if (message.role === "assistant") {
++    assertAssistantContent(message.content);
++    return;
++  }
++  throw new NormalizedChatError(`normalized message role "${message.role}" is not allowed`);
++}
++
++export function validateNormalizedChatInput(input: NormalizedChatInput): void {
++  if (!Array.isArray(input.messages) || input.messages.length === 0) {
++    throw new NormalizedChatError("normalized chat input requires messages");
++  }
++  for (const message of input.messages) validateNormalizedMessage(message);
++  if (input.toolChoice !== undefined && !isNormalizedToolChoice(input.toolChoice)) {
++    throw new NormalizedChatError("toolChoice must be auto, required, none, or a named tool");
++  }
++}
++
++export function joinTextAndData(
++  parts: ReadonlyArray<{ type: string; text?: string; mediaType?: string; data?: Uint8Array }>,
++): string {
++  return parts.map((part) => {
++    if (part.type === "text") return part.text ?? "";
++    if (part.type === "data" && part.data && part.mediaType) {
++      return decodeUtf8Data(part.data, part.mediaType);
++    }
++    return "";
++  }).join("");
++}
+diff --git a/packages/lapp/src/index.ts b/packages/lapp/src/index.ts
+index df16c720258391577c8024b231b34787e5f46a6d..a27430c60a79166c721ceae410771d505191994e 100644
+--- a/packages/lapp/src/index.ts
++++ b/packages/lapp/src/index.ts
+@@ -139,6 +139,13 @@ export {
+ export {
+   createLappClient,
+   StreamingUnsupportedError,
++  NORMALIZED_IMAGE_MEDIA_TYPES,
++  NORMALIZED_TEXT_MEDIA_TYPES,
++  NormalizedChatError,
++  mapNormalizedToolChoice,
++  parseToolArgumentsStrict,
++  validateNormalizedChatInput,
++  validateNormalizedMessage,
+   type ChatInput,
+   type ChatMessage,
+   type CreateClientOptions,
+@@ -147,6 +154,22 @@ export {
+   type LappClient,
+   type LappResponse,
+   type LappStreamEventUnion,
++  type NormalizedAssistantPart,
++  type NormalizedChatInput,
++  type NormalizedChatResponse,
++  type NormalizedDataPart,
++  type NormalizedImageMediaType,
++  type NormalizedImagePart,
++  type NormalizedMessage,
++  type NormalizedStreamEvent,
++  type NormalizedSystemPart,
++  type NormalizedTextMediaType,
++  type NormalizedTextPart,
++  type NormalizedToolCallPart,
++  type NormalizedToolChoice,
++  type NormalizedToolResultPart,
++  type NormalizedUserNormalPart,
++  type NormalizedUserPart,
+   type ParsedToolCall,
+   type TestConnectionResult,
+   type ToolDefinition,
+@@ -191,21 +214,33 @@ export {
+ } from "./media/index.js";
+ export {
+   LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION,
++  LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2,
+   type LappManagerBridgeV1,
++  type LappManagerBridgeV2,
++  type ManagerApplyModelsRequest,
++  type ManagerApplyModelsResult,
+   type ManagerAuthView,
++  type ManagerCancelPreviewRequest,
++  type ManagerCancelPreviewView,
+   type ManagerCredentialView,
+   type ManagerErrorCode,
+   type ManagerErrorView,
+   type ManagerFeature,
++  type ManagerFeatureV2,
+   type ManagerHandshake,
++  type ManagerHandshakeV2,
+   type ManagerInvalidatedEvent,
+   type ManagerOperation,
+   type ManagerPhase,
++  type ManagerPreviewModelEntry,
++  type ManagerPreviewModelsRequest,
++  type ManagerPreviewModelsView,
+   type ManagerProfileView,
+   type ManagerProviderView,
+   type ManagerResult,
+   type ManagerSnapshot,
+   type ManagerTestConnectionRequest,
++  type ManagerTestConnectionRequestV2,
+   type ManagerTestConnectionView,
+   type ManagerTransactionRequest,
+   type ManagerTransactionResult,
+@@ -216,6 +251,7 @@ export {
+   computeProfileRevision,
+   computeRegistryRevision,
+   createNodeLappManagerHost,
++  createNodeLappManagerHostV2,
+   ProfilePathInvalidError,
+   ProfileRevisionConflictError,
+   type CommitProfileTransactionOptions,
+@@ -223,6 +259,7 @@ export {
+   type CommitRegistryTransactionOptions,
+   type CommitRegistryTransactionResult,
+   type CreateNodeLappManagerHostOptions,
++  type CreateNodeLappManagerHostV2Options,
+ } from "./manager/host.js";
+ export {
+   inspectWriterLock,
+diff --git a/packages/lapp/src/manager/contract.ts b/packages/lapp/src/manager/contract.ts
+index 95ce5abcdb688251aeae2a2fa02229438f67772d..64269ea9d67e26daa5c0597bc2112e124a389679 100644
+--- a/packages/lapp/src/manager/contract.ts
++++ b/packages/lapp/src/manager/contract.ts
+@@ -36,6 +36,20 @@ export interface ManagerHandshake {
+   features: ManagerFeature[];
+ }
+ 
++/** Version of the additive Copilot-facing manager bridge. V1 remains 1. */
++export const LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2 = 2 as const;
++
++export type ManagerFeatureV2 =
++  | ManagerFeature
++  | "preview-models"
++  | "apply-models"
++  | "test-connection-v2";
++
++export interface ManagerHandshakeV2 {
++  protocolVersion: typeof LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2;
++  features: ManagerFeatureV2[];
++}
++
+ export interface ManagerCredentialView {
+   scheme: "plaintext" | "env" | "vault";
+   /** env:// or vault:// reference. Plaintext values are never returned. */
+@@ -119,7 +133,11 @@ export type ManagerErrorCode =
+   | "PROFILE_NOT_FOUND"
+   | "PROFILE_OPERATION_FAILED"
+   | "MANAGER_OPERATION_UNSUPPORTED"
+-  | "BRIDGE_PROTOCOL_MISMATCH";
++  | "BRIDGE_PROTOCOL_MISMATCH"
++  | "MODEL_PREVIEW_NOT_FOUND"
++  | "MODEL_PREVIEW_EXPIRED"
++  | "MODEL_PREVIEW_CONSUMED"
++  | "MODEL_PREVIEW_CANCELLED";
+ 
+ /** Serializable, redacted error returned across the host bridge. */
+ export interface ManagerErrorView {
+@@ -168,6 +186,78 @@ export interface LappManagerBridgeV1 {
+   subscribe?(listener: (event: ManagerInvalidatedEvent) => void): () => void;
+ }
+ 
++export interface ManagerPreviewModelsRequest {
++  /** Caller-supplied UUID used for cancellation and in-flight replacement. */
++  operationId: string;
++  providerId: string;
++  expectedRevision: string;
++}
++
++export interface ManagerPreviewModelEntry {
++  id: string;
++  name?: string;
++}
++
++export interface ManagerPreviewModelsView {
++  previewId: string;
++  operationId: string;
++  providerId: string;
++  added: ManagerPreviewModelEntry[];
++  named: Array<{ id: string; name: string }>;
++  expiresAt: string;
++}
++
++export interface ManagerApplyModelsRequest {
++  previewId: string;
++  expectedRevision: string;
++}
++
++export interface ManagerApplyModelsResult {
++  revision: string;
++  snapshot: ManagerSnapshot;
++}
++
++export interface ManagerCancelPreviewRequest {
++  operationId: string;
++}
++
++export interface ManagerCancelPreviewView {
++  cancelled: boolean;
++}
++
++export interface ManagerTestConnectionRequestV2 {
++  selector: ModelSelector;
++  expectedRevision: string;
++}
++
++/**
++ * Additive Copilot-facing host API. V1 methods keep their existing contracts,
++ * including `transact({ operation: { type: "models.refresh" } })`.
++ */
++export interface LappManagerBridgeV2 {
++  handshake(): Promise<ManagerResult<ManagerHandshakeV2>>;
++  getSnapshot(): Promise<ManagerResult<ManagerSnapshot>>;
++  transact(
++    request: ManagerTransactionRequest,
++  ): Promise<ManagerResult<ManagerTransactionResult>>;
++  testConnection(
++    request: ManagerTestConnectionRequest,
++  ): Promise<ManagerResult<ManagerTestConnectionView>>;
++  testConnectionV2(
++    request: ManagerTestConnectionRequestV2,
++  ): Promise<ManagerResult<ManagerTestConnectionView>>;
++  previewModels(
++    request: ManagerPreviewModelsRequest,
++  ): Promise<ManagerResult<ManagerPreviewModelsView>>;
++  applyModels(
++    request: ManagerApplyModelsRequest,
++  ): Promise<ManagerResult<ManagerApplyModelsResult>>;
++  cancelPreview(
++    request: ManagerCancelPreviewRequest,
++  ): Promise<ManagerResult<ManagerCancelPreviewView>>;
++  subscribe?(listener: (event: ManagerInvalidatedEvent) => void): () => void;
++}
++
+ export type {
+   CredentialWarning,
+   ManagedProviderInput,
+diff --git a/packages/lapp/src/manager/host.ts b/packages/lapp/src/manager/host.ts
+index b6250eabcb13a15df1dfc3b2762b567e57fcef88..c0868f892fbfc60eaee9c1bd4cfa68fff23c689c 100644
+--- a/packages/lapp/src/manager/host.ts
++++ b/packages/lapp/src/manager/host.ts
+@@ -23,7 +23,7 @@ import {
+   openSystemCredentialVault,
+   parseSecretRef,
+ } from "../secret/index.js";
+-import { refreshModels } from "../sync/index.js";
++import { applyDiscoveredModels, discoverRemoteModels, refreshModels } from "../sync/index.js";
+ import {
+   CredentialError,
+   ProfileValidationError,
+@@ -35,23 +35,38 @@ import {
+ import { validateProfile } from "../validate/index.js";
+ import {
+   LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION,
++  LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2,
+   type LappManagerBridgeV1,
++  type LappManagerBridgeV2,
++  type ManagerApplyModelsRequest,
++  type ManagerApplyModelsResult,
+   type ManagerAuthView,
++  type ManagerCancelPreviewRequest,
++  type ManagerCancelPreviewView,
+   type ManagerCredentialView,
+   type ManagerErrorCode,
+   type ManagerErrorView,
++  type ManagerFeatureV2,
+   type ManagerHandshake,
++  type ManagerHandshakeV2,
+   type ManagerInvalidatedEvent,
+   type ManagerOperation,
++  type ManagerPreviewModelsRequest,
++  type ManagerPreviewModelsView,
+   type ManagerProfileView,
+   type ManagerProviderView,
+   type ManagerResult,
+   type ManagerSnapshot,
+   type ManagerTestConnectionRequest,
++  type ManagerTestConnectionRequestV2,
+   type ManagerTestConnectionView,
+   type ManagerTransactionRequest,
+   type ManagerTransactionResult,
+ } from "./contract.js";
++import {
++  MODEL_PREVIEW_TTL_MS,
++  createModelPreviewStore,
++} from "./previews.js";
+ import { computeProfileRevision, ProfilePathInvalidError } from "./revision.js";
+ export { computeProfileRevision, computeRegistryRevision, ProfilePathInvalidError } from "./revision.js";
+ import {
+@@ -94,6 +109,11 @@ export interface CreateNodeLappManagerHostOptions {
+   lock?: WriterLockOptions;
+ }
+ 
++export interface CreateNodeLappManagerHostV2Options extends CreateNodeLappManagerHostOptions {
++  /** Clock used by the in-memory preview store. Tests inject this for expiry. */
++  now?: () => number;
++}
++
+ interface StableProfile {
+   profile: LappProfile;
+   profileRevision: string;
+@@ -300,6 +320,65 @@ function connectionRequest(value: unknown): ManagerTestConnectionRequest {
+       };
+ }
+ 
++function previewModelsRequest(value: unknown): ManagerPreviewModelsRequest {
++  if (
++    !isRecord(value)
++    || typeof value.operationId !== "string"
++    || !UUID.test(value.operationId)
++    || typeof value.providerId !== "string"
++    || typeof value.expectedRevision !== "string"
++  ) {
++    throw new ManagerHostError(
++      "MANAGER_OPERATION_UNSUPPORTED",
++      "manager preview request is malformed",
++    );
++  }
++  return {
++    operationId: value.operationId,
++    providerId: value.providerId,
++    expectedRevision: value.expectedRevision,
++  };
++}
++
++function applyModelsRequest(value: unknown): ManagerApplyModelsRequest {
++  if (
++    !isRecord(value)
++    || typeof value.previewId !== "string"
++    || !UUID.test(value.previewId)
++    || typeof value.expectedRevision !== "string"
++  ) {
++    throw new ManagerHostError(
++      "MANAGER_OPERATION_UNSUPPORTED",
++      "manager apply request is malformed",
++    );
++  }
++  return {
++    previewId: value.previewId,
++    expectedRevision: value.expectedRevision,
++  };
++}
++
++function cancelPreviewRequest(value: unknown): ManagerCancelPreviewRequest {
++  if (!isRecord(value) || typeof value.operationId !== "string" || !UUID.test(value.operationId)) {
++    throw new ManagerHostError(
++      "MANAGER_OPERATION_UNSUPPORTED",
++      "manager cancel request is malformed",
++    );
++  }
++  return { operationId: value.operationId };
++}
++
++function connectionRequestV2(value: unknown): ManagerTestConnectionRequestV2 {
++  if (!isRecord(value) || typeof value.expectedRevision !== "string") {
++    throw new ManagerHostError(
++      "MANAGER_OPERATION_UNSUPPORTED",
++      "manager connection request is malformed",
++    );
++  }
++  const base = connectionRequest(value);
++  return { selector: base.selector, expectedRevision: value.expectedRevision };
++}
++
+ function sanitizeDiagnostics(
+   diagnostics: readonly Diagnostic[],
+   sensitive: readonly string[],
+@@ -464,13 +543,7 @@ function sanitizeModels(models: ManagerProviderView["models"], sensitive: readon
+   }));
+ }
+ 
+-/**
+- * Create a Node-owned manager host. The host owns the filesystem/Vault/network
+- * authority; renderer integrations receive only the narrow result-union bridge.
+- */
+-export function createNodeLappManagerHost(
+-  options: CreateNodeLappManagerHostOptions = {},
+-): LappManagerBridgeV1 {
++function createHostRuntime(options: CreateNodeLappManagerHostOptions) {
+   const root = resolveLappRoot(options.path);
+   const listeners = new Set<(event: ManagerInvalidatedEvent) => void>();
+   let tail: Promise<void> = Promise.resolve();
+@@ -816,82 +889,390 @@ export function createNodeLappManagerHost(
+     features: ["write-profile", "vault", "test-connection", "refresh-models", "events"],
+   };
+ 
++  async function handshakeV1(): Promise<ManagerResult<ManagerHandshake>> {
++    return { ok: true, value: structuredClone(handshake) };
++  }
++
++  function getSnapshot(): Promise<ManagerResult<ManagerSnapshot>> {
++    return serialize(async () => {
++      try {
++        const stable = await readStableProfile();
++        return { ok: true, value: await snapshot(stable) } as const;
++      } catch (error) {
++        return resultError<ManagerSnapshot>(error);
++      }
++    });
++  }
++
++  function transactLocked(
++    request: ManagerTransactionRequest,
++  ): Promise<ManagerResult<ManagerTransactionResult>> {
++    return serialize(async () => {
++      const operation = isRecord(request) ? request.operation : undefined;
++      try {
++        return await withWriterLock(
++          () => transact(request),
++          options.lock,
++        );
++      } catch (error) {
++        return resultError<ManagerTransactionResult>(
++          error,
++          sensitiveValues(operation),
++        );
++      }
++    });
++  }
++
++  function testConnection(
++    rawRequest: ManagerTestConnectionRequest,
++  ): Promise<ManagerResult<ManagerTestConnectionView>> {
++    return serialize(async () => {
++      try {
++        const request = connectionRequest(rawRequest);
++        const stable = await readStableProfile();
++        const selector = request.selector;
++        const client = "default" in selector
++          ? createLappClient({
++              profile: stable.profile,
++              default: selector.default,
++              ...(options.env ? { env: options.env } : {}),
++              vault: lazyVault,
++              ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
++              redactSuccessfulSecrets: true,
++            })
++          : createLappClient({
++              profile: stable.profile,
++              provider: selector.providerId,
++              model: selector.model,
++              ...(options.env ? { env: options.env } : {}),
++              vault: lazyVault,
++              ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
++              redactSuccessfulSecrets: true,
++            });
++        const tested = await client.testConnection();
++        const value: ManagerTestConnectionView = {
++          ok: tested.ok,
++          providerId: tested.provider,
++          modelId: tested.model,
++          protocol: tested.protocol,
++          ...(tested.code ? { code: redactErrorText(tested.code) } : {}),
++          ...(tested.message ? { message: redactErrorText(tested.message) } : {}),
++        };
++        return { ok: true, value } as const;
++      } catch (error) {
++        return resultError<ManagerTestConnectionView>(error);
++      }
++    });
++  }
++
++  function subscribe(listener: (event: ManagerInvalidatedEvent) => void): () => void {
++    listeners.add(listener);
++    return () => listeners.delete(listener);
++  }
++
++  function createTestClient(stable: StableProfile, selector: ManagerTestConnectionRequest["selector"]) {
++    return "default" in selector
++      ? createLappClient({
++          profile: stable.profile,
++          default: selector.default,
++          ...(options.env ? { env: options.env } : {}),
++          vault: lazyVault,
++          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
++          redactSuccessfulSecrets: true,
++        })
++      : createLappClient({
++          profile: stable.profile,
++          provider: selector.providerId,
++          model: selector.model,
++          ...(options.env ? { env: options.env } : {}),
++          vault: lazyVault,
++          ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
++          redactSuccessfulSecrets: true,
++        });
++  }
++
+   return {
+-    async handshake() {
+-      return { ok: true, value: structuredClone(handshake) };
+-    },
++    options,
++    root,
++    lazyVault,
++    handshakeV1,
++    getSnapshot,
++    transact: transactLocked,
++    testConnection,
++    subscribe,
++    readStableProfile,
++    snapshot,
++    emit,
++    resultError,
++    serialize,
++    createTestClient,
++    connectionViewFromTest: (tested: Awaited<ReturnType<ReturnType<typeof createLappClient>["testConnection"]>>): ManagerTestConnectionView => ({
++      ok: tested.ok,
++      providerId: tested.provider,
++      modelId: tested.model,
++      protocol: tested.protocol,
++      ...(tested.code ? { code: redactErrorText(tested.code) } : {}),
++      ...(tested.message ? { message: redactErrorText(tested.message) } : {}),
++    }),
++  };
++}
+ 
+-    getSnapshot() {
+-      return serialize(async () => {
+-        try {
+-          const stable = await readStableProfile();
+-          return { ok: true, value: await snapshot(stable) } as const;
+-        } catch (error) {
+-          return resultError<ManagerSnapshot>(error);
+-        }
+-      });
+-    },
++/**
++ * Create a Node-owned manager host. The host owns the filesystem/Vault/network
++ * authority; renderer integrations receive only the narrow result-union bridge.
++ */
++export function createNodeLappManagerHost(
++  options: CreateNodeLappManagerHostOptions = {},
++): LappManagerBridgeV1 {
++  const runtime = createHostRuntime(options);
++  return {
++    handshake: runtime.handshakeV1,
++    getSnapshot: runtime.getSnapshot,
++    transact: runtime.transact,
++    testConnection: runtime.testConnection,
++    subscribe: runtime.subscribe,
++  };
++}
+ 
+-    transact(request) {
+-      return serialize(async () => {
+-        const operation = isRecord(request) ? request.operation : undefined;
+-        try {
+-          return await withWriterLock(
+-            () => transact(request),
+-            options.lock,
+-          );
+-        } catch (error) {
+-          return resultError<ManagerTransactionResult>(
+-            error,
+-            sensitiveValues(operation),
+-          );
+-        }
++const V2_FEATURES: ManagerFeatureV2[] = [
++  "write-profile",
++  "vault",
++  "test-connection",
++  "refresh-models",
++  "events",
++  "preview-models",
++  "apply-models",
++  "test-connection-v2",
++];
++
++/**
++ * Additive Copilot-facing host. V1 methods, including `models.refresh`, keep
++ * their existing contracts.
++ */
++export function createNodeLappManagerHostV2(
++  options: CreateNodeLappManagerHostV2Options = {},
++): LappManagerBridgeV2 {
++  const runtime = createHostRuntime(options);
++  const now = options.now ?? Date.now;
++  const store = createModelPreviewStore(now);
++  const handshake: ManagerHandshakeV2 = {
++    protocolVersion: LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2,
++    features: [...V2_FEATURES],
++  };
++
++  async function previewModels(
++    rawRequest: unknown,
++  ): Promise<ManagerResult<ManagerPreviewModelsView>> {
++    let request: ManagerPreviewModelsRequest;
++    try {
++      request = previewModelsRequest(rawRequest);
++    } catch (error) {
++      return runtime.resultError(error);
++    }
++    const controller = store.begin(request.operationId);
++    try {
++      const before = await runtime.readStableProfile();
++      if (request.expectedRevision !== before.revision) {
++        throw new ManagerHostError(
++          "PROFILE_CONFLICT",
++          "profile changed since the manager snapshot was read",
++          before.revision,
++        );
++      }
++      const fetched = await discoverRemoteModels(before.profile, request.providerId, {
++        ...(options.env ? { env: options.env } : {}),
++        vault: runtime.lazyVault,
++        ...(options.fetchImpl ? { fetch: options.fetchImpl } : {}),
++        signal: controller.signal,
+       });
+-    },
++      if (controller.signal.aborted) {
++        throw new ManagerHostError(
++          "MODEL_PREVIEW_CANCELLED",
++          "model discovery preview was cancelled",
++        );
++      }
++      const after = await runtime.readStableProfile();
++      if (after.revision !== request.expectedRevision) {
++        throw new ManagerHostError(
++          "PROFILE_CONFLICT",
++          "profile changed before the discovery preview could be stored",
++          after.revision,
++        );
++      }
++      const applied = applyDiscoveredModels(after.profile, request.providerId, fetched);
++      const createdAt = now();
++      const previewId = randomUUID();
++      store.put({
++        previewId,
++        operationId: request.operationId,
++        providerId: request.providerId,
++        expectedRevision: request.expectedRevision,
++        fetched,
++        createdAt,
++      });
++      return {
++        ok: true,
++        value: {
++          previewId,
++          operationId: request.operationId,
++          providerId: request.providerId,
++          added: applied.added.map((model) => ({
++            id: model.modelId,
++            ...(model.modelName !== undefined ? { name: model.modelName } : {}),
++          })),
++          named: applied.named,
++          expiresAt: new Date(createdAt + MODEL_PREVIEW_TTL_MS).toISOString(),
++        },
++      };
++    } catch (error) {
++      if (controller.signal.aborted) {
++        return runtime.resultError(new ManagerHostError(
++          "MODEL_PREVIEW_CANCELLED",
++          "model discovery preview was cancelled",
++        ));
++      }
++      return runtime.resultError(error);
++    } finally {
++      store.end(request.operationId, controller);
++    }
++  }
+ 
+-    testConnection(rawRequest: ManagerTestConnectionRequest) {
+-      return serialize(async () => {
+-        try {
+-          const request = connectionRequest(rawRequest);
+-          const stable = await readStableProfile();
+-          const selector = request.selector;
+-          const client = "default" in selector
+-            ? createLappClient({
+-                profile: stable.profile,
+-                default: selector.default,
+-                ...(options.env ? { env: options.env } : {}),
+-                vault: lazyVault,
+-                ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+-                redactSuccessfulSecrets: true,
+-              })
+-            : createLappClient({
+-                profile: stable.profile,
+-                provider: selector.providerId,
+-                model: selector.model,
+-                ...(options.env ? { env: options.env } : {}),
+-                vault: lazyVault,
+-                ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+-                redactSuccessfulSecrets: true,
+-              });
+-          const tested = await client.testConnection();
+-          const value: ManagerTestConnectionView = {
+-            ok: tested.ok,
+-            providerId: tested.provider,
+-            modelId: tested.model,
+-            protocol: tested.protocol,
+-            ...(tested.code ? { code: redactErrorText(tested.code) } : {}),
+-            ...(tested.message ? { message: redactErrorText(tested.message) } : {}),
++  async function applyModels(
++    rawRequest: unknown,
++  ): Promise<ManagerResult<ManagerApplyModelsResult>> {
++    return runtime.serialize(async () => {
++      try {
++        return await withWriterLock(async () => {
++          const request = applyModelsRequest(rawRequest);
++          const taken = store.take(request.previewId);
++          if (taken.status === "missing") {
++            throw new ManagerHostError(
++              "MODEL_PREVIEW_NOT_FOUND",
++              "model discovery preview was not found",
++            );
++          }
++          if (taken.status === "expired") {
++            throw new ManagerHostError(
++              "MODEL_PREVIEW_EXPIRED",
++              "model discovery preview has expired",
++            );
++          }
++          if (taken.status === "consumed") {
++            throw new ManagerHostError(
++              "MODEL_PREVIEW_CONSUMED",
++              "model discovery preview was already applied",
++            );
++          }
++          const before = await runtime.readStableProfile(true);
++          if (request.expectedRevision !== before.revision) {
++            throw new ManagerHostError(
++              "PROFILE_CONFLICT",
++              "profile changed since the manager snapshot was read",
++              before.revision,
++            );
++          }
++          if (taken.proposal.expectedRevision !== request.expectedRevision) {
++            throw new ManagerHostError(
++              "PROFILE_CONFLICT",
++              "profile changed since the discovery preview was created",
++              before.revision,
++            );
++          }
++          const applied = applyDiscoveredModels(
++            before.profile,
++            taken.proposal.providerId,
++            taken.proposal.fetched,
++          );
++          const profileChanged = !isDeepStrictEqual(before.profile, applied.nextProfile);
++          const committed = await commitManagerTransaction({
++            rootDir: runtime.root,
++            before: before.initialized ? before.profile : null,
++            next: applied.nextProfile,
++            profileChanged,
++            vault: runtime.lazyVault,
++            lockHeld: true,
++            expectedRevision: before.profileRevision,
++          }).catch((error: unknown) => {
++            if (error instanceof ProfileRevisionConflictError) {
++              throw new ManagerHostError(
++                "PROFILE_CONFLICT",
++                "profile changed before the transaction could be committed",
++                computeManagerRevision(
++                  error.currentRevision,
++                  readManagerVaultRevision(runtime.root, options.lock),
++                ),
++              );
++            }
++            throw error;
++          });
++          const after = await runtime.readStableProfile(true);
++          const nextSnapshot = await runtime.snapshot(after);
++          if (committed.profileChanged || committed.vaultChanged) runtime.emit(after.revision);
++          return {
++            ok: true as const,
++            value: {
++              revision: after.revision,
++              snapshot: nextSnapshot,
++            },
+           };
+-          return { ok: true, value } as const;
+-        } catch (error) {
+-          return resultError<ManagerTestConnectionView>(error);
+-        }
+-      });
+-    },
++        }, options.lock);
++      } catch (error) {
++        return runtime.resultError<ManagerApplyModelsResult>(error);
++      }
++    });
++  }
+ 
+-    subscribe(listener) {
+-      listeners.add(listener);
+-      return () => listeners.delete(listener);
++  async function cancelPreview(
++    rawRequest: unknown,
++  ): Promise<ManagerResult<ManagerCancelPreviewView>> {
++    try {
++      const request = cancelPreviewRequest(rawRequest);
++      return { ok: true, value: { cancelled: store.cancel(request.operationId) } };
++    } catch (error) {
++      return runtime.resultError(error);
++    }
++  }
++
++  async function testConnectionV2(
++    rawRequest: unknown,
++  ): Promise<ManagerResult<ManagerTestConnectionView>> {
++    try {
++      const request = connectionRequestV2(rawRequest);
++      const before = await runtime.readStableProfile();
++      if (request.expectedRevision !== before.revision) {
++        throw new ManagerHostError(
++          "PROFILE_CONFLICT",
++          "profile changed since the manager snapshot was read",
++          before.revision,
++        );
++      }
++      const client = runtime.createTestClient(before, request.selector);
++      const tested = await client.testConnection();
++      const after = await runtime.readStableProfile();
++      if (after.revision !== request.expectedRevision) {
++        throw new ManagerHostError(
++          "PROFILE_CONFLICT",
++          "profile changed before the connection test could be returned",
++          after.revision,
++        );
++      }
++      return { ok: true, value: runtime.connectionViewFromTest(tested) };
++    } catch (error) {
++      return runtime.resultError(error);
++    }
++  }
++
++  return {
++    async handshake() {
++      return { ok: true, value: structuredClone(handshake) };
+     },
++    getSnapshot: runtime.getSnapshot,
++    transact: runtime.transact,
++    testConnection: runtime.testConnection,
++    testConnectionV2,
++    previewModels,
++    applyModels,
++    cancelPreview,
++    subscribe: runtime.subscribe,
+   };
+ }
+diff --git a/packages/lapp/src/manager/previews.ts b/packages/lapp/src/manager/previews.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..499430c1207117b5d73a6da24a1ff2a11f8829ce
+--- /dev/null
++++ b/packages/lapp/src/manager/previews.ts
+@@ -0,0 +1,120 @@
++/** In-memory model-discovery proposals for the V2 manager host. */
++
++export const MODEL_PREVIEW_TTL_MS = 5 * 60 * 1000;
++export const MODEL_PREVIEW_LIMIT = 8;
++
++export interface DiscoveredRemoteModel {
++  id: string;
++  name?: string;
++}
++
++export interface ModelDiscoveryProposal {
++  previewId: string;
++  operationId: string;
++  providerId: string;
++  expectedRevision: string;
++  fetched: DiscoveredRemoteModel[];
++  createdAt: number;
++}
++
++export type PreviewTakeResult =
++  | { status: "ok"; proposal: ModelDiscoveryProposal }
++  | { status: "missing" }
++  | { status: "expired" }
++  | { status: "consumed" };
++
++export interface ModelPreviewStore {
++  begin(operationId: string): AbortController;
++  end(operationId: string, controller: AbortController): void;
++  put(proposal: ModelDiscoveryProposal): void;
++  take(previewId: string): PreviewTakeResult;
++  cancel(operationId: string): boolean;
++  size(): number;
++}
++
++export function createModelPreviewStore(now: () => number = Date.now): ModelPreviewStore {
++  const proposals = new Map<string, ModelDiscoveryProposal>();
++  const inFlight = new Map<string, AbortController>();
++  const consumed = new Set<string>();
++
++  function purgeExpired(): void {
++    const t = now();
++    for (const [id, proposal] of proposals) {
++      if (t - proposal.createdAt > MODEL_PREVIEW_TTL_MS) proposals.delete(id);
++    }
++  }
++
++  function dropOperation(operationId: string): boolean {
++    let removed = false;
++    for (const [id, proposal] of proposals) {
++      if (proposal.operationId === operationId) {
++        proposals.delete(id);
++        removed = true;
++      }
++    }
++    return removed;
++  }
++
++  return {
++    begin(operationId) {
++      const existing = inFlight.get(operationId);
++      if (existing) existing.abort();
++      dropOperation(operationId);
++      const controller = new AbortController();
++      inFlight.set(operationId, controller);
++      return controller;
++    },
++
++    end(operationId, controller) {
++      if (inFlight.get(operationId) === controller) inFlight.delete(operationId);
++    },
++
++    put(proposal) {
++      purgeExpired();
++      dropOperation(proposal.operationId);
++      while (proposals.size >= MODEL_PREVIEW_LIMIT) {
++        let oldestId: string | undefined;
++        let oldestTime = Number.POSITIVE_INFINITY;
++        for (const [id, entry] of proposals) {
++          if (entry.createdAt < oldestTime) {
++            oldestTime = entry.createdAt;
++            oldestId = id;
++          }
++        }
++        if (!oldestId) break;
++        proposals.delete(oldestId);
++      }
++      proposals.set(proposal.previewId, proposal);
++    },
++
++    take(previewId) {
++      if (consumed.has(previewId)) return { status: "consumed" };
++      const proposal = proposals.get(previewId);
++      if (!proposal) return { status: "missing" };
++      if (now() - proposal.createdAt > MODEL_PREVIEW_TTL_MS) {
++        proposals.delete(previewId);
++        return { status: "expired" };
++      }
++      proposals.delete(previewId);
++      consumed.add(previewId);
++      return { status: "ok", proposal };
++    },
++
++    cancel(operationId) {
++      let cancelled = false;
++      const controller = inFlight.get(operationId);
++      if (controller) {
++        controller.abort();
++        inFlight.delete(operationId);
++        cancelled = true;
++      }
++      if (dropOperation(operationId)) cancelled = true;
++      return cancelled;
++    },
++
++    size() {
++      purgeExpired();
++      return proposals.size;
++    },
++  };
++}
+diff --git a/packages/lapp/src/sync/index.ts b/packages/lapp/src/sync/index.ts
+index 7b963f0110da4bb94e20cdda5a87c02110384480..a9ac490a80c491e3af45a68665c5521001751175 100644
+--- a/packages/lapp/src/sync/index.ts
++++ b/packages/lapp/src/sync/index.ts
+@@ -39,6 +39,15 @@ export interface RefreshModelsResult {
+   diagnostics: Diagnostic[];
+ }
+ 
++export interface DiscoveredRemoteModel {
++  id: string;
++  name?: string;
++}
++
++export interface ApplyDiscoveredModelsResult extends RefreshModelsResult {
++  named: Array<{ id: string; name: string }>;
++}
++
+ interface RemoteModel {
+   id: string;
+   name?: string;
+@@ -231,11 +240,15 @@ async function fetchAllModels(
+   throw new ModelRefreshError("model discovery exceeded 100 pages", "PAGINATION_ERROR");
+ }
+ 
+-export async function refreshModels(
++/**
++ * Resolve credentials and fetch remote models. Callers that need revision
++ * gating must check the expected revision before invoking this function.
++ */
++export async function discoverRemoteModels(
+   profile: LappProfile,
+   providerId: string,
+   options: RefreshModelsOptions = {},
+-): Promise<RefreshModelsResult> {
++): Promise<DiscoveredRemoteModel[]> {
+   const validation = validateProfile(profile);
+   if (!validation.valid) {
+     const detail = validation.diagnostics.find((entry) => entry.level === "ERROR")?.message;
+@@ -261,9 +274,8 @@ export async function refreshModels(
+     ...(options.vault ? { vault: options.vault } : {}),
+   });
+   const auth = await resolveAuthConfig(provider.config.auth, resolverBinding, { resolver });
+-  let fetched: RemoteModel[];
+   try {
+-    fetched = await fetchAllModels(
++    return await fetchAllModels(
+       provider.config,
+       auth,
+       expectedBinding,
+@@ -283,6 +295,31 @@ export async function refreshModels(
+     }
+     throw error;
+   }
++}
++
++/** Add unknown IDs and fill missing display names. Never delete or overwrite. */
++export function applyDiscoveredModels(
++  profile: LappProfile,
++  providerId: string,
++  fetched: readonly DiscoveredRemoteModel[],
++): ApplyDiscoveredModelsResult {
++  const validation = validateProfile(profile);
++  if (!validation.valid) {
++    const detail = validation.diagnostics.find((entry) => entry.level === "ERROR")?.message;
++    throw new ProfileValidationError(
++      validation.diagnostics,
++      `cannot refresh models from an invalid profile${detail ? `: ${detail}` : ""}`,
++    );
++  }
++  const providerIndex = profile.providers.findIndex((entry) => entry.config.id === providerId);
++  if (providerIndex < 0) {
++    throw new TargetResolutionError(`provider not found: ${providerId}`, "PROVIDER_NOT_FOUND");
++  }
++  const stableProfile = copyProfileRoot(profile, structuredClone(profile));
++  const provider = stableProfile.providers[providerIndex]!;
++  if (provider.config.enabled === false) {
++    throw new TargetResolutionError(`provider is disabled: ${providerId}`, "PROVIDER_DISABLED");
++  }
+   const existing = provider.models.models;
+   const existingById = new Map(existing.map((model) => [model.id, model]));
+   const identities = new Set(existing.flatMap((model) => [model.id, ...(model.aliases ?? [])]));
+@@ -298,7 +335,10 @@ export async function refreshModels(
+     .filter((model) => !existingById.has(model.id))
+     .sort((left, right) => left.id.localeCompare(right.id))
+     .map((model) => ({ id: model.id, ...(model.name ? { name: model.name } : {}) }));
+-  const fillsName = existing.some((model) => !model.name && remoteById.get(model.id)?.name);
++  const named = existing.flatMap((model) => {
++    const remoteName = remoteById.get(model.id)?.name;
++    return !model.name && remoteName ? [{ id: model.id, name: remoteName }] : [];
++  });
+   const diagnostics: Diagnostic[] = [];
+   if (provider.config.auth.type !== "none" && parseSecretRef(provider.config.auth.secret).plaintext) {
+     diagnostics.push({
+@@ -307,12 +347,15 @@ export async function refreshModels(
+       message: "auth.secret is plaintext",
+     });
+   }
+-  if (additions.length === 0 && !fillsName) return { nextProfile: profile, added: [], diagnostics };
++  if (additions.length === 0 && named.length === 0) {
++    return { nextProfile: profile, added: [], named: [], diagnostics };
++  }
+ 
+   const nextProfile = stableProfile;
+   const nextProvider = nextProfile.providers[providerIndex]!;
++  const namedById = new Map(named.map((entry) => [entry.id, entry.name]));
+   const nextModels = nextProvider.models.models.map((model) => {
+-    const remoteName = remoteById.get(model.id)?.name;
++    const remoteName = namedById.get(model.id);
+     return !model.name && remoteName ? { ...model, name: remoteName } : model;
+   });
+   nextProvider.models = {
+@@ -323,5 +366,15 @@ export async function refreshModels(
+   const addedIds = new Set(additions.map((model) => model.id));
+   const added = listModels(nextProfile, { providerId, includeDisabled: true })
+     .filter((model) => addedIds.has(model.modelId));
+-  return { nextProfile, added, diagnostics };
++  return { nextProfile, added, named, diagnostics };
++}
++
++export async function refreshModels(
++  profile: LappProfile,
++  providerId: string,
++  options: RefreshModelsOptions = {},
++): Promise<RefreshModelsResult> {
++  const fetched = await discoverRemoteModels(profile, providerId, options);
++  const { named: _named, ...result } = applyDiscoveredModels(profile, providerId, fetched);
++  return result;
+ }
+diff --git a/packages/lapp/test/manager-contract.test.ts b/packages/lapp/test/manager-contract.test.ts
+index 110dccfc519141cfc713cb65a299613606e7f314..11176c5d7b16299c32df798a96b4a5a07ae369fd 100644
+--- a/packages/lapp/test/manager-contract.test.ts
++++ b/packages/lapp/test/manager-contract.test.ts
+@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
+ import { describe, expect, it } from "vitest";
+ import {
+   LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION,
++  LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2,
++  type ManagerPreviewModelsView,
+   type ManagerResult,
+   type ManagerSnapshot,
+ } from "../src/manager/contract.js";
+@@ -17,8 +19,18 @@ describe("browser-safe manager contract", () => {
+         diagnostics: [],
+       },
+     };
++    const preview: ManagerPreviewModelsView = {
++      previewId: "00000000-0000-4000-8000-000000000001",
++      operationId: "00000000-0000-4000-8000-000000000002",
++      providerId: "provider",
++      added: [{ id: "model-b", name: "B" }],
++      named: [{ id: "model-a", name: "A" }],
++      expiresAt: "2026-01-01T00:05:00.000Z",
++    };
+     expect(LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION).toBe(1);
++    expect(LAPP_MANAGER_BRIDGE_PROTOCOL_VERSION_V2).toBe(2);
+     expect(structuredClone(value)).toEqual(value);
++    expect(structuredClone(preview)).toEqual(preview);
+   });
+ 
+   it("contains no Node or native runtime imports", () => {
+diff --git a/packages/lapp/test/manager-host-v2.test.ts b/packages/lapp/test/manager-host-v2.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..7888d33b6a1ca618add0e6cc8b8f7784b476051d
+--- /dev/null
++++ b/packages/lapp/test/manager-host-v2.test.ts
+@@ -0,0 +1,458 @@
++import fs from "node:fs";
++import path from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  CredentialError,
++  credentialBindingsEqual,
++  inspectWriterLock,
++  type CredentialBinding,
++  type CredentialVault,
++  type ManagerResult,
++} from "../src/index.js";
++import {
++  createNodeLappManagerHost,
++  createNodeLappManagerHostV2,
++} from "../src/manager/host.js";
++import { MODEL_PREVIEW_LIMIT, MODEL_PREVIEW_TTL_MS } from "../src/manager/previews.js";
++
++const roots: string[] = [];
++let previousStateHome: string | undefined;
++
++function temporaryRoot(): string {
++  const root = fs.mkdtempSync(path.join(process.cwd(), ".manager-v2-test-"));
++  roots.push(root);
++  return root;
++}
++
++function uuid(n: number): string {
++  return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
++}
++
++beforeEach(() => {
++  previousStateHome = process.env.LAPP_STATE_HOME;
++  process.env.LAPP_STATE_HOME = temporaryRoot();
++});
++
++afterEach(() => {
++  vi.restoreAllMocks();
++  if (previousStateHome === undefined) delete process.env.LAPP_STATE_HOME;
++  else process.env.LAPP_STATE_HOME = previousStateHome;
++  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
++});
++
++function unwrap<T>(result: ManagerResult<T>): T {
++  if (!result.ok) throw new Error(`${result.error.code}: ${result.error.message}`);
++  return result.value;
++}
++
++class MemoryVault implements CredentialVault {
++  readonly records = new Map<string, { secret: string; binding: CredentialBinding }>();
++  resolveCalls = 0;
++  statusCalls = 0;
++
++  async put(
++    reference: string,
++    secret: string,
++    binding: CredentialBinding,
++    options: { overwrite?: boolean } = {},
++  ): Promise<void> {
++    if (this.records.has(reference) && !options.overwrite) {
++      throw new CredentialError("VAULT_CREDENTIAL_EXISTS", "vault credential already exists");
++    }
++    this.records.set(reference, { secret, binding: structuredClone(binding) });
++  }
++
++  async resolve(reference: string, binding: CredentialBinding): Promise<string> {
++    this.resolveCalls += 1;
++    const record = this.records.get(reference);
++    if (!record) {
++      throw new CredentialError("VAULT_CREDENTIAL_NOT_FOUND", "vault credential was not found");
++    }
++    if (!credentialBindingsEqual(record.binding, binding)) {
++      throw new CredentialError("VAULT_BINDING_MISMATCH", "vault binding mismatch");
++    }
++    return record.secret;
++  }
++
++  async status(reference: string, binding: CredentialBinding) {
++    this.statusCalls += 1;
++    const record = this.records.get(reference);
++    return record
++      ? {
++          reference,
++          exists: true,
++          bindingMatches: credentialBindingsEqual(record.binding, binding),
++        }
++      : { reference, exists: false };
++  }
++
++  async delete(reference: string): Promise<boolean> {
++    return this.records.delete(reference);
++  }
++}
++
++function discoveryProvider(secret: string) {
++  return {
++    type: "provider.set" as const,
++    input: {
++      id: "provider",
++      name: "Provider",
++      baseUrl: "http://127.0.0.1:8080/v1",
++      protocols: ["openai-chat-completions"],
++      models: [{ id: "model-a" }],
++      auth: {
++        type: "bearer" as const,
++        credential: { secret },
++      },
++      modelDiscovery: {
++        protocol: "openai-models" as const,
++        url: "http://127.0.0.1:8080/v1/models",
++      },
++    },
++  };
++}
++
++function modelsResponse(models: Array<{ id: string; name?: string }>): Response {
++  return new Response(JSON.stringify({ data: models }), {
++    status: 200,
++    headers: { "content-type": "application/json" },
++  });
++}
++
++async function seededHost(options: {
++  fetchImpl?: typeof fetch;
++  now?: () => number;
++  vault?: MemoryVault;
++  lock?: { stateHome: string; timeoutMs?: number; retryDelayMs?: number };
++} = {}) {
++  const root = temporaryRoot();
++  const vault = options.vault ?? new MemoryVault();
++  const host = createNodeLappManagerHostV2({
++    path: root,
++    vault,
++    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
++    ...(options.now ? { now: options.now } : {}),
++    ...(options.lock ? { lock: options.lock } : {}),
++  });
++  const initial = unwrap(await host.getSnapshot());
++  const created = unwrap(await host.transact({
++    expectedRevision: initial.revision,
++    operation: discoveryProvider("sk-manager-v2-secret"),
++  }));
++  vault.resolveCalls = 0;
++  vault.statusCalls = 0;
++  return { root, vault, host, revision: created.revision };
++}
++
++describe("Node LAPP manager host V2", () => {
++  it("advertises protocol 2 without changing the V1 handshake", async () => {
++    const v1 = createNodeLappManagerHost({ path: temporaryRoot(), vault: new MemoryVault() });
++    const v2 = createNodeLappManagerHostV2({ path: temporaryRoot(), vault: new MemoryVault() });
++    expect(unwrap(await v1.handshake())).toEqual({
++      protocolVersion: 1,
++      features: ["write-profile", "vault", "test-connection", "refresh-models", "events"],
++    });
++    expect(unwrap(await v2.handshake())).toEqual({
++      protocolVersion: 2,
++      features: [
++        "write-profile",
++        "vault",
++        "test-connection",
++        "refresh-models",
++        "events",
++        "preview-models",
++        "apply-models",
++        "test-connection-v2",
++      ],
++    });
++  });
++
++  it("rejects a stale preview revision before Vault or network access", async () => {
++    let fetches = 0;
++    const { host, vault } = await seededHost({
++      fetchImpl: async () => {
++        fetches += 1;
++        throw new Error("network must not run");
++      },
++    });
++    const result = await host.previewModels({
++      operationId: uuid(1),
++      providerId: "provider",
++      expectedRevision: "sha256:stale",
++    });
++    expect(result).toMatchObject({ ok: false, error: { code: "PROFILE_CONFLICT" } });
++    expect(vault.resolveCalls).toBe(0);
++    expect(fetches).toBe(0);
++  });
++
++  it("rejects a stale V2 connection test before Vault or network access", async () => {
++    let fetches = 0;
++    const { host, vault } = await seededHost({
++      fetchImpl: async () => {
++        fetches += 1;
++        throw new Error("network must not run");
++      },
++    });
++    const result = await host.testConnectionV2({
++      expectedRevision: "sha256:stale",
++      selector: { providerId: "provider", model: "model-a" },
++    });
++    expect(result).toMatchObject({ ok: false, error: { code: "PROFILE_CONFLICT" } });
++    expect(vault.resolveCalls).toBe(0);
++    expect(fetches).toBe(0);
++  });
++
++  it("discovers without holding the writer lock and discards the proposal if the revision changes", async () => {
++    const stateHome = temporaryRoot();
++    let releaseFetch!: () => void;
++    let started!: () => void;
++    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
++    const waitForRelease = new Promise<void>((resolve) => { releaseFetch = resolve; });
++    let fetches = 0;
++    const { host, revision } = await seededHost({
++      lock: { stateHome, timeoutMs: 2_000, retryDelayMs: 5 },
++      fetchImpl: async () => {
++        fetches += 1;
++        started();
++        await waitForRelease;
++        return modelsResponse([{ id: "model-b", name: "B" }]);
++      },
++    });
++
++    const preview = host.previewModels({
++      operationId: uuid(2),
++      providerId: "provider",
++      expectedRevision: revision,
++    });
++    await startedPromise;
++    expect(inspectWriterLock({ stateHome }).locked).toBe(false);
++
++    const mutated = unwrap(await host.transact({
++      expectedRevision: revision,
++      operation: {
++        type: "model.set",
++        input: { providerId: "provider", id: "local-only" },
++      },
++    }));
++    expect(mutated.revision).not.toBe(revision);
++    releaseFetch();
++
++    const result = await preview;
++    expect(result).toMatchObject({ ok: false, error: { code: "PROFILE_CONFLICT" } });
++    expect(fetches).toBe(1);
++
++    const apply = await host.applyModels({
++      previewId: uuid(99),
++      expectedRevision: mutated.revision,
++    });
++    expect(apply).toMatchObject({ ok: false, error: { code: "MODEL_PREVIEW_NOT_FOUND" } });
++  });
++
++  it("applies additions only through a locked CAS write with no network I/O", async () => {
++    const stateHome = temporaryRoot();
++    let fetches = 0;
++    const { host, revision, root } = await seededHost({
++      lock: { stateHome, timeoutMs: 2_000, retryDelayMs: 5 },
++      fetchImpl: async () => {
++        fetches += 1;
++        return modelsResponse([
++          { id: "model-a", name: "Remote A" },
++          { id: "model-b", name: "B" },
++          { id: "model-c" },
++        ]);
++      },
++    });
++
++    const namedSeed = unwrap(await host.transact({
++      expectedRevision: revision,
++      operation: {
++        type: "model.set",
++        input: { providerId: "provider", id: "keep-name", name: "Local Name", aliases: ["alias-keep"] },
++      },
++    }));
++    const preview = unwrap(await host.previewModels({
++      operationId: uuid(3),
++      providerId: "provider",
++      expectedRevision: namedSeed.revision,
++    }));
++    expect(preview.added.map((model) => model.id)).toEqual(["model-b", "model-c"]);
++    expect(preview.named).toEqual([{ id: "model-a", name: "Remote A" }]);
++    expect(fetches).toBe(1);
++
++    fetches = 0;
++    const applied = unwrap(await host.applyModels({
++      previewId: preview.previewId,
++      expectedRevision: namedSeed.revision,
++    }));
++    expect(fetches).toBe(0);
++    expect(inspectWriterLock({ stateHome }).locked).toBe(false);
++    expect(applied.revision).not.toBe(namedSeed.revision);
++    expect(applied.snapshot.profile.providers[0]?.models.map((model) => ({
++      id: model.id,
++      name: model.name,
++    }))).toEqual([
++      { id: "model-a", name: "Remote A" },
++      { id: "keep-name", name: "Local Name" },
++      { id: "model-b", name: "B" },
++      { id: "model-c", name: undefined },
++    ]);
++
++    const modelsFile = JSON.parse(fs.readFileSync(
++      path.join(root, "providers", "provider", "models.json"),
++      "utf8",
++    )) as { models: Array<{ id: string; name?: string }> };
++    expect(modelsFile.models.find((model) => model.id === "keep-name")?.name).toBe("Local Name");
++
++    const reused = await host.applyModels({
++      previewId: preview.previewId,
++      expectedRevision: applied.revision,
++    });
++    expect(reused).toMatchObject({ ok: false, error: { code: "MODEL_PREVIEW_CONSUMED" } });
++  });
++
++  it("expires unused proposals after five minutes", async () => {
++    let clock = 1_000_000;
++    const { host, revision } = await seededHost({
++      now: () => clock,
++      fetchImpl: async () => modelsResponse([{ id: "model-b", name: "B" }]),
++    });
++    const preview = unwrap(await host.previewModels({
++      operationId: uuid(4),
++      providerId: "provider",
++      expectedRevision: revision,
++    }));
++    clock += MODEL_PREVIEW_TTL_MS + 1;
++    const expired = await host.applyModels({
++      previewId: preview.previewId,
++      expectedRevision: revision,
++    });
++    expect(expired).toMatchObject({ ok: false, error: { code: "MODEL_PREVIEW_EXPIRED" } });
++  });
++
++  it("keeps at most eight proposals per host and evicts the oldest", async () => {
++    const { host, revision } = await seededHost({
++      fetchImpl: async () => modelsResponse([{ id: "model-b", name: "B" }]),
++    });
++    const previewIds: string[] = [];
++    for (let i = 0; i < MODEL_PREVIEW_LIMIT + 1; i++) {
++      const preview = unwrap(await host.previewModels({
++        operationId: uuid(10 + i),
++        providerId: "provider",
++        expectedRevision: revision,
++      }));
++      previewIds.push(preview.previewId);
++    }
++    const evicted = await host.applyModels({
++      previewId: previewIds[0]!,
++      expectedRevision: revision,
++    });
++    expect(evicted).toMatchObject({ ok: false, error: { code: "MODEL_PREVIEW_NOT_FOUND" } });
++    const newest = unwrap(await host.applyModels({
++      previewId: previewIds[previewIds.length - 1]!,
++      expectedRevision: revision,
++    }));
++    expect(newest.snapshot.profile.providers[0]?.models.some((model) => model.id === "model-b")).toBe(true);
++  });
++
++  it("cancels an in-flight preview and does not store a proposal", async () => {
++    let releaseFetch!: () => void;
++    let started!: () => void;
++    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
++    const waitForRelease = new Promise<void>((resolve) => { releaseFetch = resolve; });
++    const { host, revision } = await seededHost({
++      fetchImpl: async (_input, init) => {
++        started();
++        await waitForRelease;
++        if (init?.signal?.aborted) {
++          const error = new Error("aborted");
++          error.name = "AbortError";
++          throw error;
++        }
++        return modelsResponse([{ id: "model-b", name: "B" }]);
++      },
++    });
++
++    const preview = host.previewModels({
++      operationId: uuid(20),
++      providerId: "provider",
++      expectedRevision: revision,
++    });
++    await startedPromise;
++    const cancelled = unwrap(await host.cancelPreview({ operationId: uuid(20) }));
++    expect(cancelled.cancelled).toBe(true);
++    releaseFetch();
++    expect(await preview).toMatchObject({
++      ok: false,
++      error: { code: "MODEL_PREVIEW_CANCELLED" },
++    });
++  });
++
++  it("rechecks revision after a V2 connection test and leaves V1 refresh unchanged", async () => {
++    let releaseFetch!: () => void;
++    let started!: () => void;
++    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
++    const waitForRelease = new Promise<void>((resolve) => { releaseFetch = resolve; });
++    let fetches = 0;
++    const { host, revision } = await seededHost({
++      fetchImpl: async (input) => {
++        fetches += 1;
++        const url = String(input);
++        if (url.includes("/models")) {
++          return modelsResponse([{ id: "model-b", name: "B" }]);
++        }
++        started();
++        await waitForRelease;
++        return new Response(JSON.stringify({
++          choices: [{ message: { content: "pong" }, finish_reason: "stop" }],
++        }), { status: 200 });
++      },
++    });
++
++    const test = host.testConnectionV2({
++      expectedRevision: revision,
++      selector: { providerId: "provider", model: "model-a" },
++    });
++    await startedPromise;
++    unwrap(await host.transact({
++      expectedRevision: revision,
++      operation: { type: "model.set", input: { providerId: "provider", id: "other" } },
++    }));
++    releaseFetch();
++    expect(await test).toMatchObject({ ok: false, error: { code: "PROFILE_CONFLICT" } });
++
++    const latest = unwrap(await host.getSnapshot());
++    const refreshed = unwrap(await host.transact({
++      expectedRevision: latest.revision,
++      operation: { type: "models.refresh", providerId: "provider" },
++    }));
++    expect(refreshed.snapshot.profile.providers[0]?.models.some((model) => model.id === "model-b")).toBe(true);
++    expect(fetches).toBeGreaterThanOrEqual(2);
++  });
++
++  it("rejects malformed V2 payloads without touching the preview store", async () => {
++    const { host } = await seededHost({
++      fetchImpl: async () => modelsResponse([]),
++    });
++    await expect(host.previewModels({
++      operationId: "not-a-uuid",
++      providerId: "provider",
++      expectedRevision: "sha256:x",
++    } as never)).resolves.toMatchObject({
++      ok: false,
++      error: { code: "MANAGER_OPERATION_UNSUPPORTED" },
++    });
++    await expect(host.applyModels({
++      previewId: "also-bad",
++      expectedRevision: "sha256:x",
++    } as never)).resolves.toMatchObject({
++      ok: false,
++      error: { code: "MANAGER_OPERATION_UNSUPPORTED" },
++    });
++    await expect(host.testConnectionV2({
++      selector: { default: "chat" },
++    } as never)).resolves.toMatchObject({
++      ok: false,
++      error: { code: "MANAGER_OPERATION_UNSUPPORTED" },
++    });
++  });
++});
+diff --git a/packages/lapp/test/normalized-contract.test.ts b/packages/lapp/test/normalized-contract.test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3fedf9dcf93c85461b10d6a7dfe31efe6d7fce16
+--- /dev/null
++++ b/packages/lapp/test/normalized-contract.test.ts
+@@ -0,0 +1,425 @@
++import { describe, expect, it } from "vitest";
++import {
++  NormalizedChatError,
++  createLappClient,
++  mapNormalizedToolChoice,
++  parseToolArgumentsStrict,
++  validateNormalizedChatInput,
++  validateNormalizedMessage,
++  type AuthConfig,
++  type LappProfile,
++  type NormalizedChatInput,
++  type NormalizedMessage,
++} from "../src/index.js";
++
++function profile(protocol: string, auth: AuthConfig = { type: "bearer", secret: "secret" }): LappProfile {
++  return {
++    global: {
++      schemaVersion: "1.0",
++      defaults: { chat: { providerId: "p", modelId: "m" } },
++    },
++    providers: [{
++      config: {
++        schemaVersion: "1.0",
++        id: "p",
++        baseUrl: "https://provider.example/v1",
++        protocols: [protocol],
++        auth,
++      },
++      models: { schemaVersion: "1.0", models: [{ id: "m", type: "chat" }] },
++    }],
++  };
++}
++
++function json(value: unknown): Response {
++  return new Response(JSON.stringify(value), { status: 200 });
++}
++
++function sse(events: string[]): Response {
++  const encoder = new TextEncoder();
++  return new Response(new ReadableStream<Uint8Array>({
++    start(controller) {
++      controller.enqueue(encoder.encode(events.map((event) => `data: ${event}\n\n`).join("")));
++      controller.close();
++    },
++  }));
++}
++
++const PNG = Uint8Array.from([
++  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
++  0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
++  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
++  0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
++  0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
++  0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
++]);
++const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]);
++const GIF = Uint8Array.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00]);
++const WEBP = Uint8Array.from([
++  0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
++]);
++
++const PROTOCOLS = [
++  "openai-chat-completions",
++  "openai-responses",
++  "anthropic-messages",
++] as const;
++
++function successReply(protocol: string): unknown {
++  if (protocol === "openai-chat-completions") {
++    return { choices: [{ message: { content: "ok" }, finish_reason: "stop" }] };
++  }
++  if (protocol === "openai-responses") {
++    return { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }] };
++  }
++  return { content: [{ type: "text", text: "ok" }], stop_reason: "end_turn" };
++}
++
++function toolReply(protocol: string, args: string): unknown {
++  if (protocol === "openai-chat-completions") {
++    return {
++      choices: [{
++        message: {
++          content: "calling",
++          tool_calls: [{ id: "call_1", type: "function", function: { name: "add", arguments: args } }],
++        },
++        finish_reason: "tool_calls",
++      }],
++    };
++  }
++  if (protocol === "openai-responses") {
++    return {
++      status: "completed",
++      output: [
++        { type: "message", content: [{ type: "output_text", text: "calling" }] },
++        { type: "function_call", call_id: "call_1", name: "add", arguments: args },
++      ],
++    };
++  }
++  return {
++    content: [
++      { type: "text", text: "calling" },
++      { type: "tool_use", id: "call_1", name: "add", input: JSON.parse(args) },
++    ],
++    stop_reason: "tool_use",
++  };
++}
++
++async function captureBody(
++  protocol: (typeof PROTOCOLS)[number],
++  input: NormalizedChatInput,
++): Promise<Record<string, unknown>> {
++  let body: Record<string, unknown> = {};
++  const client = createLappClient({
++    profile: profile(protocol),
++    fetchImpl: async (_input, init) => {
++      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
++      return json(successReply(protocol));
++    },
++  });
++  await client.chatNormalized(input);
++  return body;
++}
++
++describe("normalized chat input validation", () => {
++  it("rejects mixed normal and tool-result user content", () => {
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [
++          { type: "text", text: "hi" },
++          { type: "tool-result", toolCallId: "call_1", content: [{ type: "text", text: "3" }] },
++        ],
++      }],
++    })).toThrow(NormalizedChatError);
++  });
++
++  it("accepts UTF-8 text/plain, text/markdown, and application/json data", () => {
++    const encoder = new TextEncoder();
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [
++          { type: "text", text: "hello" },
++          { type: "data", mediaType: "text/plain", data: encoder.encode("plain") },
++          { type: "data", mediaType: "text/markdown", data: encoder.encode("# md") },
++          { type: "data", mediaType: "application/json", data: encoder.encode("{\"a\":1}") },
++        ],
++      }],
++    })).not.toThrow();
++  });
++
++  it("rejects invalid UTF-8 data and non-JSON application/json", () => {
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [{ type: "data", mediaType: "text/plain", data: Uint8Array.from([0xff, 0xfe]) }],
++      }],
++    })).toThrow(/UTF-8/);
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [{ type: "data", mediaType: "application/json", data: new TextEncoder().encode("not-json") }],
++      }],
++    })).toThrow(/JSON/);
++  });
++
++  it("accepts PNG, JPEG, WebP, and GIF image bytes and rejects other payloads", () => {
++    for (const [mediaType, data] of [
++      ["image/png", PNG],
++      ["image/jpeg", JPEG],
++      ["image/webp", WEBP],
++      ["image/gif", GIF],
++    ] as const) {
++      expect(() => validateNormalizedChatInput({
++        messages: [{ role: "user", content: [{ type: "image", mediaType, data }] }],
++      })).not.toThrow();
++    }
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [{ type: "image", mediaType: "image/png", data: new TextEncoder().encode("nope") }],
++      }],
++    })).toThrow(/media type/);
++  });
++
++  it("rejects assistant data, tool-result, and text after the first tool call", () => {
++    const toolCall = {
++      type: "tool-call" as const,
++      id: "call_1",
++      name: "add",
++      arguments: { a: 1 },
++    };
++    expect(() => validateNormalizedMessage({
++      role: "assistant",
++      content: [{ type: "data", mediaType: "text/plain", data: new TextEncoder().encode("x") }],
++    } as unknown as NormalizedMessage)).toThrow(/data/);
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "assistant",
++        content: [
++          { type: "text", text: "before" },
++          toolCall,
++          { type: "text", text: "after" },
++        ],
++      }],
++    })).toThrow(/after the first tool call/);
++  });
++
++  it("rejects image tool results", () => {
++    expect(() => validateNormalizedChatInput({
++      messages: [{
++        role: "user",
++        content: [{
++          type: "tool-result",
++          toolCallId: "call_1",
++          content: [{ type: "image", mediaType: "image/png", data: PNG }],
++        }],
++      } as unknown as NormalizedMessage],
++    })).toThrow(/image tool results/);
++  });
++
++  it("requires tool-call arguments to be a JSON object", () => {
++    expect(() => parseToolArgumentsStrict("{")).toThrow(NormalizedChatError);
++    expect(() => parseToolArgumentsStrict("[1]")).toThrow(NormalizedChatError);
++    expect(() => parseToolArgumentsStrict("\"x\"")).toThrow(NormalizedChatError);
++    expect(parseToolArgumentsStrict("{\"a\":1}")).toEqual({ a: 1 });
++  });
++});
++
++describe("normalized protocol mapping", () => {
++  const encoder = new TextEncoder();
++  const userInput: NormalizedChatInput = {
++    messages: [
++      { role: "system", content: [{ type: "text", text: "sys" }] },
++      {
++        role: "user",
++        content: [
++          { type: "text", text: "look" },
++          { type: "data", mediaType: "application/json", data: encoder.encode("{\"k\":true}") },
++          { type: "image", mediaType: "image/png", data: PNG },
++        ],
++      },
++    ],
++    tools: [{ name: "add", parameters: { type: "object" } }],
++    toolChoice: { type: "named", name: "add" },
++  };
++
++  it.each(PROTOCOLS)("maps text, JSON data, and PNG input for %s", async (protocol) => {
++    const body = await captureBody(protocol, userInput);
++    const serialized = JSON.stringify(body);
++    expect(serialized).toContain("look");
++    expect(serialized).toContain("k");
++    expect(serialized).toMatch(/\{\\"k\\":true\}/);
++    expect(serialized).toContain(Buffer.from(PNG).toString("base64"));
++    if (protocol === "openai-chat-completions") {
++      expect(body.tool_choice).toEqual({ type: "function", function: { name: "add" } });
++      const messages = body.messages as Array<Record<string, unknown>>;
++      expect(messages[0]).toMatchObject({ role: "system", content: "sys" });
++      expect(messages[1]?.role).toBe("user");
++    }
++    if (protocol === "openai-responses") {
++      expect(body.tool_choice).toEqual({ type: "function", name: "add" });
++      expect(body.instructions).toBe("sys");
++      const input = body.input as Array<Record<string, unknown>>;
++      expect(input[0]?.role).toBe("user");
++    }
++    if (protocol === "anthropic-messages") {
++      expect(body.tool_choice).toEqual({ type: "tool", name: "add" });
++      expect(body.system).toBe("sys");
++    }
++  });
++
++  it.each(PROTOCOLS)("maps a pure tool-result user collection for %s", async (protocol) => {
++    const body = await captureBody(protocol, {
++      messages: [{
++        role: "user",
++        content: [{
++          type: "tool-result",
++          toolCallId: "call_1",
++          content: [
++            { type: "text", text: "3" },
++            { type: "data", mediaType: "text/plain", data: encoder.encode(" extra") },
++          ],
++        }],
++      }],
++    });
++    const serialized = JSON.stringify(body);
++    expect(serialized).toContain("3 extra");
++    if (protocol === "openai-chat-completions") {
++      expect(body.messages).toEqual([{ role: "tool", tool_call_id: "call_1", content: "3 extra" }]);
++    }
++    if (protocol === "openai-responses") {
++      expect(body.input).toEqual([{ type: "function_call_output", call_id: "call_1", output: "3 extra" }]);
++    }
++    if (protocol === "anthropic-messages") {
++      expect(body.messages).toEqual([{
++        role: "user",
++        content: [{ type: "tool_result", tool_use_id: "call_1", content: "3 extra" }],
++      }]);
++    }
++  });
++
++  it("maps normalized tool choice consistently", () => {
++    expect(mapNormalizedToolChoice("auto", "openai-chat-completions")).toBe("auto");
++    expect(mapNormalizedToolChoice("required", "openai-responses")).toBe("required");
++    expect(mapNormalizedToolChoice("none", "openai-chat-completions")).toBe("none");
++    expect(mapNormalizedToolChoice("auto", "anthropic-messages")).toEqual({ type: "auto" });
++    expect(mapNormalizedToolChoice("required", "anthropic-messages")).toEqual({ type: "any" });
++    expect(mapNormalizedToolChoice("none", "anthropic-messages")).toEqual({ type: "none" });
++    expect(mapNormalizedToolChoice({ type: "named", name: "add" }, "anthropic-messages"))
++      .toEqual({ type: "tool", name: "add" });
++  });
++});
++
++describe("normalized protocol responses", () => {
++  it.each(PROTOCOLS)("parses text-then-tool-call output for %s", async (protocol) => {
++    const client = createLappClient({
++      profile: profile(protocol),
++      fetchImpl: async () => json(toolReply(protocol, "{\"a\":1,\"b\":2}")),
++    });
++    const response = await client.chatNormalized({
++      messages: [{ role: "user", content: [{ type: "text", text: "add" }] }],
++    });
++    expect(response.text).toBe("calling");
++    expect(response.parts).toEqual([
++      { type: "text", text: "calling" },
++      { type: "tool-call", id: "call_1", name: "add", arguments: { a: 1, b: 2 } },
++    ]);
++  });
++
++  it.each(PROTOCOLS)("fails invalid tool-call argument objects for %s", async (protocol) => {
++    if (protocol === "anthropic-messages") {
++      const client = createLappClient({
++        profile: profile(protocol),
++        fetchImpl: async () => json({
++          content: [{ type: "tool_use", id: "call_1", name: "add", input: [1, 2] }],
++        }),
++      });
++      await expect(client.chatNormalized({
++        messages: [{ role: "user", content: [{ type: "text", text: "add" }] }],
++      })).rejects.toThrow(/JSON object/);
++      return;
++    }
++    const client = createLappClient({
++      profile: profile(protocol),
++      fetchImpl: async () => json(toolReply(protocol, "[1,2]")),
++    });
++    await expect(client.chatNormalized({
++      messages: [{ role: "user", content: [{ type: "text", text: "add" }] }],
++    })).rejects.toThrow(/JSON object/);
++  });
++
++  it("rejects text after the first tool call in Anthropic output", async () => {
++    const client = createLappClient({
++      profile: profile("anthropic-messages"),
++      fetchImpl: async () => json({
++        content: [
++          { type: "text", text: "before" },
++          { type: "tool_use", id: "call_1", name: "add", input: { a: 1 } },
++          { type: "text", text: "after" },
++        ],
++      }),
++    });
++    await expect(client.chatNormalized({
++      messages: [{ role: "user", content: [{ type: "text", text: "add" }] }],
++    })).rejects.toThrow(/after the first tool call/);
++  });
++
++  it.each(PROTOCOLS)("rejects image or tool-result assistant output for %s", async (protocol) => {
++    const raw = protocol === "openai-chat-completions"
++      ? { choices: [{ message: { content: [{ type: "image_url", image_url: { url: "x" } }] } }] }
++      : protocol === "openai-responses"
++        ? { status: "completed", output: [{ type: "input_image", image_url: "x" }] }
++        : { content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "xx" } }] };
++    const client = createLappClient({
++      profile: profile(protocol),
++      fetchImpl: async () => json(raw),
++    });
++    await expect(client.chatNormalized({
++      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
++    })).rejects.toThrow(/data, image, or tool-result/);
++  });
++
++  it("fails streamed non-object arguments instead of becoming {}", async () => {
++    const client = createLappClient({
++      profile: profile("openai-chat-completions"),
++      fetchImpl: async () => sse([
++        JSON.stringify({
++          choices: [{
++            delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "add", arguments: "[" } }] },
++            finish_reason: "tool_calls",
++          }],
++        }),
++        "[DONE]",
++      ]),
++    });
++    await expect(async () => {
++      for await (const _event of client.streamNormalized({
++        messages: [{ role: "user", content: [{ type: "text", text: "add" }] }],
++      })) {
++        // consume
++      }
++    }).rejects.toThrow(/JSON object/);
++
++    const v1Events = [];
++    const v1 = createLappClient({
++      profile: profile("openai-chat-completions"),
++      fetchImpl: async () => sse([
++        JSON.stringify({
++          choices: [{
++            delta: { tool_calls: [{ index: 0, id: "call_1", function: { name: "add", arguments: "[" } }] },
++            finish_reason: "tool_calls",
++          }],
++        }),
++        "[DONE]",
++      ]),
++    });
++    for await (const event of v1.stream({ messages: [{ role: "user", content: "add" }] })) {
++      v1Events.push(event);
++    }
++    expect(v1Events.filter((event) => event.kind === "tool-call")).toEqual([
++      { kind: "tool-call", id: "call_1", name: "add", arguments: "[" },
++    ]);
++  });
++});
