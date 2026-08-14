@@ -10,7 +10,7 @@ Use this script on a Windows x64 machine with VS Code Stable ≥ 1.128.1 and Git
 
 ## Manager
 
-1. Run `OpenLAPP: Open Manager`.
+1. Run `OpenLAPP: Open Manager`. On first use, decline the shared-profile consent and confirm the Manager does not open. Run the command again, accept, and confirm Overview explains that the LAPP location is shared (not per-app isolation).
 2. Confirm Overview shows platform, profile root (redacted), Vault state, and model counts.
 3. Switch language via the VS Code display language (`en` / `zh-cn`) and reopen the Manager.
 4. Create a provider, store a Vault credential, create a model, enable/disable, and delete with confirmation.

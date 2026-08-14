@@ -295,6 +295,7 @@ export class ManagerPanel {
       platform: this.platform,
       locale: this.locale(),
       registered: this.registered,
+      sharedProfileConsent: true,
       config: vscode.workspace.getConfiguration(),
     });
   }

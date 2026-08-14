@@ -44,6 +44,7 @@ describe("manager webview", () => {
       defaults: {},
       agentHost: { enabled: undefined, inspected: true, preview: true },
       locale: "en",
+      sharedProfileConsent: true,
       providerRegistered: true,
       eligibleModelCount: 0,
       hashedModels: [],
@@ -54,6 +55,7 @@ describe("manager webview", () => {
   it("renders overview and switches sections with keyboard labels", async () => {
     const wrapper = mount(App);
     expect(wrapper.text()).toContain("Overview");
+    expect(wrapper.text()).toMatch(/not per-app isolation/i);
     await wrapper.get("nav button:nth-of-type(2)").trigger("click");
     expect(wrapper.text()).toContain("Providers");
     expect(wrapper.get(".skip-link").attributes("href")).toBe("#manager-main");

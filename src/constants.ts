@@ -42,3 +42,4 @@ export const LAPP_SUBAGENT_DEFAULT = "subagent";
 
 export const SETTINGS_BACKUP_KEY = "openlapp.utilitySettingsBackup";
 export const GLOBAL_STATE_LOCALE_KEY = "openlapp.locale";
+export { CONSENT_STATE_KEY } from "./consent.js";

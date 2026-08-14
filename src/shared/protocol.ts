@@ -60,6 +60,7 @@ export interface ManagerUiSnapshot {
   };
   agentHost: AgentHostView;
   locale: "en" | "zh-cn";
+  sharedProfileConsent: boolean;
   providerRegistered: boolean;
   eligibleModelCount: number;
   hashedModels: Array<{

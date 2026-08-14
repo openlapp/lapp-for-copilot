@@ -165,6 +165,7 @@ const lappHome = path.join(storage, "lapp-home");
 fs.rmSync(lappHome, { recursive: true, force: true });
 writeSmokeProfile(lappHome);
 process.env.LAPP_HOME = lappHome;
+process.env.OPENLAPP_ACCEPT_SHARED_PROFILE = "1";
 process.env.TEST_RESOURCES = storage;
 process.env.CODE_VERSION = UI_VERSION;
 delete process.env.CODE_TYPE;

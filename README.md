@@ -27,6 +27,8 @@ The VSIX is written under `dist-vsix/`. Install it in VS Code Stable 1.128.1 or 
 - Registers eligible chat models with hashed public IDs: `openlapp/lapp-<sha256-base64url>`.
 - Opens `OpenLAPP: Open Manager` as a full-page editor for providers, Vault metadata, models, defaults, Copilot utility settings, and diagnostics.
 
+On first use the extension asks for informed consent before it watches or creates the shared LAPP folder, or registers models. Other LAPP-compatible apps for the same Windows user can use that location and the same Vault credentials. This is not per-app isolation. Review or withdraw later with `OpenLAPP: Review Shared Profile Consent`.
+
 The extension does not publish, does not use proposed APIs, and does not add a custom chat participant or Activity Bar container.
 
 ## Scripts

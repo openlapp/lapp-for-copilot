@@ -10,6 +10,7 @@ export function buildManagerUiSnapshot(input: {
   platform: ManagerUiSnapshot["platform"];
   locale: "en" | "zh-cn";
   registered: boolean;
+  sharedProfileConsent?: boolean;
   config: {
     inspect(section: string): { globalValue?: unknown; defaultValue?: unknown } | undefined;
     get?(key: string): unknown;
@@ -33,6 +34,7 @@ export function buildManagerUiSnapshot(input: {
       preview: true,
     },
     locale: input.locale,
+    sharedProfileConsent: input.sharedProfileConsent !== false,
     providerRegistered: input.registered,
     eligibleModelCount: input.snapshot.catalog.models.length,
     hashedModels: input.snapshot.catalog.models.map((model) => ({

@@ -31,6 +31,8 @@ VSIX 输出在 `dist-vsix/`。
 - 把符合条件的对话模型注册给 Copilot，公开 ID 为哈希：`openlapp/lapp-<sha256-base64url>`。
 - 用命令 **OpenLAPP: Open Manager** 打开整页管理器：提供方、Vault 元数据、模型、默认项、Copilot 实用模型设置、诊断。
 
+首次使用前会要求知情同意：未同意前不会监视或创建共享 LAPP 目录，也不会向 Copilot 注册模型。同一 Windows 账户下的其他 LAPP 兼容应用也可以使用该位置和同一套 Vault 凭据。这不是按应用隔离。之后可用命令 **OpenLAPP: Review Shared Profile Consent** 再次查看或撤回。
+
 本扩展不上架为必须步骤、不使用 proposed API、不添加自定义 Chat 参与者，也不占用活动栏容器。
 
 ## 在 Copilot 里使用

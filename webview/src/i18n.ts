@@ -57,6 +57,7 @@ const en = {
   unset: "(unset)",
   noEligibleModels: "No eligible Copilot models. Apply is disabled.",
   discovering: "Discovery preview in progress…",
+  sharedProfileNotice: "This Manager uses the shared system LAPP profile and Vault for this Windows user. Other LAPP-compatible apps on the same account can use the same files and credentials. This is not per-app isolation.",
 };
 
 const zh = {
@@ -116,6 +117,7 @@ const zh = {
   unset: "（未设置）",
   noEligibleModels: "没有可用的 Copilot 模型，无法写入。",
   discovering: "正在预览发现结果…",
+  sharedProfileNotice: "本管理器使用当前 Windows 用户的共享系统 LAPP 配置和凭据库。同一账户下的其他 LAPP 兼容应用也可以使用这些文件和凭据。这不是按应用隔离。",
 };
 
 export const messages: Record<Locale, typeof en> = { en, "zh-cn": zh };

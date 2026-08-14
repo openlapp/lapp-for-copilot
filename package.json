@@ -40,7 +40,8 @@
   "activationEvents": [
     "onLanguageModelChatProvider:openlapp",
     "onCommand:openlapp.openManager",
-    "onCommand:openlapp.copyDiagnostics"
+    "onCommand:openlapp.copyDiagnostics",
+    "onCommand:openlapp.reviewConsent"
   ],
   "contributes": {
     "languageModelChatProviders": [
@@ -65,6 +66,10 @@
         "command": "openlapp.copyDiagnostics",
         "title": "OpenLAPP: Copy Diagnostics Report",
         "icon": "$(copy)"
+      },
+      {
+        "command": "openlapp.reviewConsent",
+        "title": "OpenLAPP: Review Shared Profile Consent"
       }
     ],
     "menus": {
@@ -77,6 +82,9 @@
         },
         {
           "command": "openlapp.copyDiagnostics"
+        },
+        {
+          "command": "openlapp.reviewConsent"
         }
       ],
       "editor/title": [

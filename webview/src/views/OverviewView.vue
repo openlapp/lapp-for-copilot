@@ -11,6 +11,7 @@ const ui = () => state.ui;
     <p class="banner" :data-kind="ui()?.platform.registered ? 'ok' : 'error'">
       {{ ui()?.platform.registered ? t(state.locale, "registered") : t(state.locale, "unregistered") }}
     </p>
+    <p class="notice">{{ t(state.locale, "sharedProfileNotice") }}</p>
     <dl class="grid">
       <div>
         <dt>Platform</dt>

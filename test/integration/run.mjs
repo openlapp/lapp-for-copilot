@@ -99,6 +99,7 @@ try {
       launchArgs: [tmp, "--disable-extensions", "--disable-workspace-trust"],
       extensionTestsEnv: {
         LAPP_HOME: lappHome,
+        OPENLAPP_ACCEPT_SHARED_PROFILE: "1",
       },
     });
     writeStatus({ status: "PASSED", version, insiders: Boolean(insiders), executable: vscodeExecutablePath });
