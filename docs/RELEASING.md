@@ -43,7 +43,7 @@ git push origin v0.1.0
 
 ## Conventional-commit cuts (release-please)
 
-Pushes to `main` also run release-please. When it opens (or updates) a release PR and that PR merges, it tags `vX.Y.Z` and the same package job attaches the VSIX.
+Pushes to `main` also run release-please. It tags `vX.Y.Z` on `main` directly (this repo does not let `GITHUB_TOKEN` open PRs). The same package job then attaches the VSIX.
 
 Use conventional commits (`feat:`, `fix:`, …) if you want that path.
 
